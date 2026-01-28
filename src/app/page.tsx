@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Session, Blocker, Idea } from "@/types";
 
 export default function Home() {
@@ -18,6 +18,12 @@ export default function Home() {
   const [images, setImages] = useState<string[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
 
+  // ========== 筛选状态 ==========
+  const [activeTab, setActiveTab] = useState<"all" | "session" | "idea" | "blocker">("all");
+  const [showFilter, setShowFilter] = useState(false);
+  const [filterMonth, setFilterMonth] = useState<string | null>(null);
+  const [filterHasImages, setFilterHasImages] = useState(false);
+
   // ========== 编辑状态 ==========
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingType, setEditingType] = useState<"session" | "idea" | "blocker" | null>(null);
@@ -33,7 +39,6 @@ export default function Home() {
       if (oldIdeas) {
         const parsed = JSON.parse(oldIdeas);
         if (Array.isArray(parsed) && typeof parsed[0] === "string") {
-          // 旧格式是字符串数组，转换为新格式
           const migrated = parsed.map((content: string, i: number) => ({
             id: `migrated-${i}`,
             content,
@@ -148,12 +153,11 @@ export default function Home() {
 
   // 高亮标签的函数
   const renderContentWithTags = (content: string) => {
-    // 匹配 #标签 格式（支持中英文）
     const parts = content.split(/(#[\w\u4e00-\u9fa5]+)/g);
     return parts.map((part, i) => {
       if (part.startsWith('#')) {
         return (
-          <span key={i} className="text-blue-500 bg-blue-50 px-1 rounded">
+          <span key={i} className="text-[var(--neon-magenta)] bg-[rgba(255,0,255,0.15)] px-1">
             {part}
           </span>
         );
@@ -162,9 +166,9 @@ export default function Home() {
     });
   };
 
-  // 继续 Session（以相同目标开始新 Session）
+  // 继续 Session
   const continueSession = (goal: string) => {
-    if (activeSession) return; // 已有进行中的 session
+    if (activeSession) return;
     const newSession: Session = {
       id: Date.now().toString(),
       goal,
@@ -194,7 +198,6 @@ export default function Home() {
       reader.readAsDataURL(file);
     });
 
-    // 清空 input 以便重复选择
     e.target.value = "";
   };
 
@@ -282,7 +285,6 @@ export default function Home() {
 
   const handleSubmit = () => {
     if (editingId) {
-      // 编辑模式
       if (editingType === "session") {
         setSessions(sessions.map(s =>
           s.id === editingId ? { ...s, goal: inputValue.trim() } : s
@@ -298,7 +300,6 @@ export default function Home() {
       }
       closeSheet();
     } else {
-      // 新建模式
       if (sheetMode === "session") startSession();
       else if (sheetMode === "idea") addIdea();
       else if (sheetMode === "blocker") addBlocker();
@@ -327,7 +328,6 @@ export default function Home() {
       meta?: { duration?: string; solution?: string; status?: string };
     }>> = new Map();
 
-    // 添加已完成的 sessions
     sessions.filter(s => s.status === "completed").forEach(s => {
       const dateKey = getDateKey(new Date(s.startTime));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
@@ -341,7 +341,6 @@ export default function Home() {
       });
     });
 
-    // 添加 ideas
     ideas.forEach(idea => {
       const dateKey = getDateKey(new Date(idea.createdAt));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
@@ -355,7 +354,6 @@ export default function Home() {
       });
     });
 
-    // 添加 blockers
     blockers.forEach(b => {
       const dateKey = getDateKey(new Date(b.createdAt));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
@@ -369,7 +367,6 @@ export default function Home() {
       });
     });
 
-    // 按日期排序（最新的在前），每组内按时间排序
     const sortedGroups = Array.from(groups.entries())
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([dateKey, items]) => ({
@@ -380,23 +377,86 @@ export default function Home() {
     return sortedGroups;
   };
 
-  const groupedRecords = getGroupedRecords();
+  const allGroupedRecords = getGroupedRecords();
+
+  // ========== 可用月份计算 ==========
+  const availableMonths = useMemo(() => {
+    const monthSet = new Set<string>();
+    sessions.filter(s => s.status === "completed").forEach(s => {
+      monthSet.add(new Date(s.startTime).toISOString().slice(0, 7));
+    });
+    ideas.forEach(i => {
+      monthSet.add(new Date(i.createdAt).toISOString().slice(0, 7));
+    });
+    blockers.forEach(b => {
+      monthSet.add(new Date(b.createdAt).toISOString().slice(0, 7));
+    });
+    return Array.from(monthSet).sort().reverse();
+  }, [sessions, ideas, blockers]);
+
+  // ========== 筛选逻辑 ==========
+  const hasActiveFilter = activeTab !== "all" || filterMonth !== null || filterHasImages;
+
+  const groupedRecords = useMemo(() => {
+    let filtered = allGroupedRecords.map(group => ({
+      ...group,
+      items: group.items.filter(item => {
+        if (activeTab !== "all" && item.type !== activeTab) return false;
+        if (filterMonth && !group.dateKey.startsWith(filterMonth)) return false;
+        if (filterHasImages && (!item.images || item.images.length === 0)) return false;
+        return true;
+      }),
+    })).filter(group => group.items.length > 0);
+    return filtered;
+  }, [allGroupedRecords, activeTab, filterMonth, filterHasImages]);
+
   const hasRecords = groupedRecords.length > 0;
+
+  const resetFilters = () => {
+    setActiveTab("all");
+    setFilterMonth(null);
+    setFilterHasImages(false);
+    setShowFilter(false);
+  };
 
   // ========== 图标组件 ==========
   const TypeIcon = ({ type }: { type: "session" | "idea" | "blocker" }) => {
-    if (type === "session") return <span className="text-emerald-500">●</span>;
-    if (type === "idea") return <span className="text-amber-500">◆</span>;
-    return <span className="text-rose-500">▲</span>;
+    if (type === "session") return <span className="text-[var(--neon-cyan)]">●</span>;
+    if (type === "idea") return <span className="text-[var(--neon-orange)]">◆</span>;
+    return <span className="text-[var(--neon-magenta)]">▲</span>;
   };
 
   return (
-    <main className="min-h-screen bg-neutral-50">
+    <main className="min-h-screen relative z-[1]" style={{ background: "var(--background)" }}>
       {/* ========== 顶部区域 ========== */}
-      <div className="bg-white border-b border-neutral-100">
+      <div
+        className="border-b-2"
+        style={{
+          background: "var(--surface)",
+          borderImage: "linear-gradient(90deg, #FF00FF, #00FFFF) 1",
+        }}
+      >
         <div className="max-w-lg mx-auto px-5 py-6">
-          <h1 className="text-xl font-semibold text-neutral-800">VibeLog</h1>
-          <p className="text-sm text-neutral-400 mt-1">
+          <h1
+            className="text-2xl font-bold tracking-wider"
+            style={{
+              fontFamily: "var(--font-heading), Orbitron, sans-serif",
+              background: "linear-gradient(90deg, #FF6B00, #FF00FF, #00FFFF)",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              filter: "drop-shadow(0 0 12px rgba(255, 0, 255, 0.5))",
+            }}
+          >
+            VibeLog
+          </h1>
+          <p
+            className="text-sm mt-1 tracking-wide"
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              color: "var(--neon-cyan)",
+              textShadow: "0 0 8px rgba(0, 255, 255, 0.4)",
+            }}
+          >
             {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
           </p>
         </div>
@@ -404,46 +464,187 @@ export default function Home() {
 
       {/* ========== 主内容区域 ========== */}
       <div className="max-w-lg mx-auto px-5 py-6">
-        {/* 进行中的 Session */}
+        {/* 进行中的 Session — 终端窗口风格 */}
         {activeSession && (
-          <div className="bg-emerald-50 rounded-2xl p-5 mb-6 border border-emerald-100">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                <span className="text-sm text-emerald-600 font-medium">进行中</span>
-              </div>
-              <span className="text-2xl font-light font-mono text-emerald-700 tabular-nums">
-                {formatTime(elapsedTime)}
+          <div
+            className="rounded-none p-0 mb-6 border overflow-hidden"
+            style={{
+              background: "var(--surface)",
+              borderColor: "var(--neon-cyan)",
+              boxShadow: "0 0 20px rgba(0, 255, 255, 0.15), inset 0 0 20px rgba(0, 255, 255, 0.03)",
+            }}
+          >
+            {/* 终端标题栏 */}
+            <div
+              className="flex items-center gap-2 px-4 py-2"
+              style={{ background: "rgba(0, 255, 255, 0.08)", borderBottom: "1px solid rgba(0, 255, 255, 0.2)" }}
+            >
+              <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#27C93F]" />
+              <span
+                className="ml-2 text-xs uppercase tracking-widest"
+                style={{ fontFamily: "var(--font-mono), monospace", color: "rgba(0, 255, 255, 0.5)" }}
+              >
+                session.active
               </span>
             </div>
-            <p className="text-neutral-800 mb-4">{activeSession.goal}</p>
-            <button
-              onClick={endSession}
-              className="w-full py-3 bg-emerald-600 text-white font-medium rounded-xl hover:bg-emerald-700 transition-colors"
-            >
-              结束 Session
-            </button>
+
+            {/* 终端内容 */}
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{
+                      background: "var(--neon-magenta)",
+                      boxShadow: "0 0 8px var(--neon-magenta)",
+                      animation: "status-pulse 2s ease-in-out infinite",
+                    }}
+                  />
+                  <span
+                    className="text-sm font-medium uppercase tracking-wider"
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      color: "var(--neon-magenta)",
+                      animation: "status-pulse 2s ease-in-out infinite",
+                    }}
+                  >
+                    进行中
+                  </span>
+                </div>
+                <span
+                  className="text-3xl font-light tabular-nums"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    color: "var(--neon-cyan)",
+                    textShadow: "0 0 16px rgba(0, 255, 255, 0.6), 0 0 32px rgba(0, 255, 255, 0.3)",
+                  }}
+                >
+                  {formatTime(elapsedTime)}
+                </span>
+              </div>
+              <p className="mb-4" style={{ color: "var(--foreground)" }}>{activeSession.goal}</p>
+              <button
+                onClick={endSession}
+                className="w-full py-3 font-medium rounded-none uppercase tracking-wider transition-all duration-200 ease-linear"
+                style={{
+                  fontFamily: "var(--font-mono), monospace",
+                  background: "var(--neon-magenta)",
+                  color: "#090014",
+                  transform: "skewX(-12deg)",
+                  boxShadow: "0 0 16px rgba(255, 0, 255, 0.4)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.boxShadow = "0 0 24px rgba(255, 0, 255, 0.7)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = "0 0 16px rgba(255, 0, 255, 0.4)";
+                }}
+              >
+                <span style={{ display: "inline-block", transform: "skewX(12deg)" }}>
+                  结束 Session
+                </span>
+              </button>
+            </div>
           </div>
         )}
 
-        {/* 开始记录按钮 */}
+        {/* 开始记录按钮 — 斜切霓虹风格 */}
         {!activeSession && (
           <button
             onClick={() => openSheet("select")}
-            className="w-full py-4 bg-neutral-900 text-white font-medium rounded-2xl hover:bg-neutral-800 transition-colors mb-6 flex items-center justify-center gap-2"
+            className="w-full py-4 font-medium rounded-none mb-6 flex items-center justify-center gap-2 uppercase tracking-wider transition-all duration-200 ease-linear border-2"
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              background: "transparent",
+              color: "var(--neon-cyan)",
+              borderColor: "var(--neon-cyan)",
+              transform: "skewX(-12deg)",
+              textShadow: "0 0 8px rgba(0, 255, 255, 0.4)",
+              boxShadow: "0 0 12px rgba(0, 255, 255, 0.2)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--neon-cyan)";
+              e.currentTarget.style.color = "#090014";
+              e.currentTarget.style.boxShadow = "0 0 24px rgba(0, 255, 255, 0.5)";
+              e.currentTarget.style.textShadow = "none";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--neon-cyan)";
+              e.currentTarget.style.boxShadow = "0 0 12px rgba(0, 255, 255, 0.2)";
+              e.currentTarget.style.textShadow = "0 0 8px rgba(0, 255, 255, 0.4)";
+            }}
           >
-            <span className="text-xl">+</span>
-            <span>开始记录</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", transform: "skewX(12deg)" }}>
+              <span className="text-xl">+</span>
+              <span>开始记录</span>
+            </span>
           </button>
         )}
+
+        {/* ========== Tab 分栏 + 筛选按钮 ========== */}
+        <div className="flex items-center justify-between mb-5 gap-2">
+          <div className="flex gap-1">
+            {([
+              { key: "all", label: "全部", color: "var(--neon-cyan)" },
+              { key: "session", label: "Session", color: "var(--neon-cyan)" },
+              { key: "idea", label: "Idea", color: "var(--neon-orange)" },
+              { key: "blocker", label: "Blocker", color: "var(--neon-magenta)" },
+            ] as const).map(tab => {
+              const isActive = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    background: isActive ? tab.color : "transparent",
+                    color: isActive ? "#090014" : tab.color,
+                    borderColor: tab.color,
+                    textShadow: isActive ? "none" : `0 0 6px ${tab.color}`,
+                    boxShadow: isActive ? `0 0 12px ${tab.color}` : "none",
+                    fontWeight: isActive ? 700 : 500,
+                  }}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => setShowFilter(true)}
+            className="px-2 py-1.5 text-lg rounded-none transition-all duration-200 ease-linear"
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              color: hasActiveFilter ? "var(--neon-magenta)" : "var(--neon-cyan)",
+              textShadow: hasActiveFilter
+                ? "0 0 12px rgba(255, 0, 255, 0.7)"
+                : "0 0 6px rgba(0, 255, 255, 0.4)",
+            }}
+            title="筛选"
+          >
+            ☰
+          </button>
+        </div>
 
         {/* ========== 时间线记录 ========== */}
         {hasRecords ? (
           <div className="space-y-6">
             {groupedRecords.map(({ dateKey, items }) => (
               <div key={dateKey}>
-                {/* 日期标题 */}
-                <h2 className="text-sm font-medium text-neutral-400 mb-3 sticky top-0 bg-neutral-50 py-2">
+                {/* 日期标题 — 大写等宽 + 青色发光 */}
+                <h2
+                  className="text-sm font-medium mb-3 sticky top-0 py-2 uppercase tracking-widest"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    color: "var(--neon-cyan)",
+                    textShadow: "0 0 8px rgba(0, 255, 255, 0.3)",
+                    background: "var(--background)",
+                  }}
+                >
                   {formatDateHeader(dateKey)}
                 </h2>
 
@@ -452,7 +653,22 @@ export default function Home() {
                   {items.map(item => (
                     <div
                       key={item.id}
-                      className="bg-white rounded-xl p-4 shadow-sm group"
+                      className="rounded-none p-4 group transition-all duration-200 ease-linear border-t-2 border-l-2"
+                      style={{
+                        background: "var(--surface-light)",
+                        borderTopColor: "var(--neon-cyan)",
+                        borderLeftColor: "var(--neon-magenta)",
+                        backdropFilter: "blur(8px)",
+                        boxShadow: "0 0 8px rgba(0, 255, 255, 0.05)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                        e.currentTarget.style.boxShadow = "0 0 20px rgba(0, 255, 255, 0.15), 0 0 40px rgba(255, 0, 255, 0.08)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.boxShadow = "0 0 8px rgba(0, 255, 255, 0.05)";
+                      }}
                     >
                       <div className="flex items-start gap-3">
                         <div className="mt-1">
@@ -460,15 +676,26 @@ export default function Home() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between gap-2">
-                            <p className="text-neutral-800 flex-1">{renderContentWithTags(item.content)}</p>
+                            <p style={{ color: "var(--foreground)" }} className="flex-1">
+                              {renderContentWithTags(item.content)}
+                            </p>
                             {/* 操作按钮 */}
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 ease-linear">
                               {/* Session 继续按钮 */}
                               {item.type === "session" && !activeSession && (
                                 <button
                                   onClick={() => continueSession(item.content)}
-                                  className="p-1.5 text-emerald-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"
+                                  className="p-1.5 rounded-none transition-all duration-200 ease-linear"
+                                  style={{ color: "var(--neon-cyan)" }}
                                   title="继续"
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = "rgba(0, 255, 255, 0.1)";
+                                    e.currentTarget.style.boxShadow = "0 0 8px rgba(0, 255, 255, 0.3)";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = "transparent";
+                                    e.currentTarget.style.boxShadow = "none";
+                                  }}
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -478,8 +705,19 @@ export default function Home() {
                               {/* 编辑按钮 */}
                               <button
                                 onClick={() => startEditing(item.id, item.type, item.content, item.images)}
-                                className="p-1.5 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 rounded-lg"
+                                className="p-1.5 rounded-none transition-all duration-200 ease-linear"
+                                style={{ color: "rgba(224, 224, 224, 0.4)" }}
                                 title="编辑"
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.color = "var(--neon-magenta)";
+                                  e.currentTarget.style.background = "rgba(255, 0, 255, 0.1)";
+                                  e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)";
+                                  e.currentTarget.style.background = "transparent";
+                                  e.currentTarget.style.boxShadow = "none";
+                                }}
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -488,29 +726,41 @@ export default function Home() {
                               </button>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 mt-2 text-sm text-neutral-400">
+                          <div
+                            className="flex items-center gap-2 mt-2 text-sm"
+                            style={{ fontFamily: "var(--font-mono), monospace", color: "rgba(224, 224, 224, 0.4)" }}
+                          >
                             <span>{item.time}</span>
                             {item.meta?.duration && (
                               <>
                                 <span>·</span>
-                                <span className="text-emerald-600">{item.meta.duration}</span>
+                                <span style={{ color: "var(--neon-cyan)", textShadow: "0 0 6px rgba(0, 255, 255, 0.3)" }}>
+                                  {item.meta.duration}
+                                </span>
                               </>
                             )}
                             {item.meta?.status === "resolved" && (
                               <>
                                 <span>·</span>
-                                <span className="text-emerald-600">已解决</span>
+                                <span style={{ color: "var(--neon-cyan)", textShadow: "0 0 6px rgba(0, 255, 255, 0.3)" }}>
+                                  已解决
+                                </span>
                               </>
                             )}
                             {item.meta?.status === "open" && (
                               <>
                                 <span>·</span>
-                                <span className="text-rose-500">待解决</span>
+                                <span style={{ color: "var(--neon-magenta)", textShadow: "0 0 6px rgba(255, 0, 255, 0.3)" }}>
+                                  待解决
+                                </span>
                               </>
                             )}
                           </div>
                           {item.meta?.solution && (
-                            <p className="text-sm text-emerald-600 mt-2">
+                            <p
+                              className="text-sm mt-2"
+                              style={{ color: "var(--neon-cyan)", textShadow: "0 0 6px rgba(0, 255, 255, 0.2)" }}
+                            >
                               → {renderContentWithTags(item.meta.solution)}
                             </p>
                           )}
@@ -522,7 +772,8 @@ export default function Home() {
                                   key={i}
                                   src={img}
                                   alt={`图片 ${i + 1}`}
-                                  className="w-20 h-20 object-cover rounded-lg flex-shrink-0"
+                                  className="w-20 h-20 object-cover rounded-none flex-shrink-0 border"
+                                  style={{ borderColor: "var(--neon-magenta)", opacity: 0.9 }}
                                 />
                               ))}
                             </div>
@@ -535,10 +786,60 @@ export default function Home() {
               </div>
             ))}
           </div>
+        ) : hasActiveFilter ? (
+          <div className="text-center py-16">
+            <p
+              className="uppercase tracking-widest"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                color: "var(--neon-magenta)",
+                textShadow: "0 0 12px rgba(255, 0, 255, 0.4)",
+              }}
+            >
+              没有匹配的记录
+            </p>
+            <button
+              onClick={resetFilters}
+              className="mt-4 px-4 py-2 text-sm rounded-none uppercase tracking-wider border transition-all duration-200 ease-linear"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                color: "var(--neon-cyan)",
+                borderColor: "var(--neon-cyan)",
+                background: "transparent",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--neon-cyan)";
+                e.currentTarget.style.color = "#090014";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = "var(--neon-cyan)";
+              }}
+            >
+              重置筛选
+            </button>
+          </div>
         ) : (
           <div className="text-center py-16">
-            <p className="text-neutral-400">还没有记录</p>
-            <p className="text-neutral-300 text-sm mt-1">点击上方按钮开始你的第一条记录</p>
+            <p
+              className="uppercase tracking-widest"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                color: "rgba(224, 224, 224, 0.3)",
+                textShadow: "0 0 8px rgba(0, 255, 255, 0.15)",
+              }}
+            >
+              还没有记录
+            </p>
+            <p
+              className="text-sm mt-2 tracking-wide"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                color: "rgba(224, 224, 224, 0.2)",
+              }}
+            >
+              点击上方按钮开始你的第一条记录
+            </p>
           </div>
         )}
       </div>
@@ -548,51 +849,106 @@ export default function Home() {
         <>
           {/* 遮罩 */}
           <div
-            className="fixed inset-0 bg-black/30 z-40"
+            className="fixed inset-0 z-40"
+            style={{ background: "rgba(9, 0, 20, 0.7)", backdropFilter: "blur(4px)" }}
             onClick={closeSheet}
           />
 
           {/* 面板 */}
-          <div className="fixed bottom-0 left-0 right-0 bg-white rounded-t-3xl z-50 p-6 pb-10 animate-slide-up">
+          <div
+            className="fixed bottom-0 left-0 right-0 z-50 p-6 pb-10 animate-slide-up rounded-none border-t-2"
+            style={{
+              background: "var(--surface)",
+              borderImage: "linear-gradient(90deg, #FF00FF, #00FFFF) 1",
+            }}
+          >
             {sheetMode === "select" ? (
               <>
-                <h3 className="text-lg font-semibold text-neutral-800 mb-5">选择记录类型</h3>
+                <h3
+                  className="text-lg font-semibold mb-5 uppercase tracking-wider"
+                  style={{
+                    fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                    color: "var(--foreground)",
+                    textShadow: "0 0 8px rgba(255, 0, 255, 0.3)",
+                  }}
+                >
+                  选择记录类型
+                </h3>
                 <div className="space-y-3">
+                  {/* Session 选项 — 终端窗口风格 */}
                   <button
                     onClick={() => setSheetMode("session")}
-                    className="w-full p-4 bg-emerald-50 rounded-xl text-left hover:bg-emerald-100 transition-colors"
+                    className="w-full p-4 rounded-none text-left transition-all duration-200 ease-linear border"
+                    style={{
+                      background: "rgba(0, 255, 255, 0.05)",
+                      borderColor: "rgba(0, 255, 255, 0.3)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(0, 255, 255, 0.1)";
+                      e.currentTarget.style.boxShadow = "0 0 16px rgba(0, 255, 255, 0.2)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(0, 255, 255, 0.05)";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-emerald-500 text-lg">●</span>
+                      <span className="text-lg" style={{ color: "var(--neon-cyan)", textShadow: "0 0 8px rgba(0, 255, 255, 0.5)" }}>●</span>
                       <div>
-                        <p className="font-medium text-neutral-800">开始 Session</p>
-                        <p className="text-sm text-neutral-400">记录一段 coding 时光</p>
+                        <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>开始 Session</p>
+                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>记录一段 coding 时光</p>
                       </div>
                     </div>
                   </button>
 
+                  {/* Idea 选项 */}
                   <button
                     onClick={() => setSheetMode("idea")}
-                    className="w-full p-4 bg-amber-50 rounded-xl text-left hover:bg-amber-100 transition-colors"
+                    className="w-full p-4 rounded-none text-left transition-all duration-200 ease-linear border"
+                    style={{
+                      background: "rgba(255, 107, 0, 0.05)",
+                      borderColor: "rgba(255, 107, 0, 0.3)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(255, 107, 0, 0.1)";
+                      e.currentTarget.style.boxShadow = "0 0 16px rgba(255, 107, 0, 0.2)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(255, 107, 0, 0.05)";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-amber-500 text-lg">◆</span>
+                      <span className="text-lg" style={{ color: "var(--neon-orange)", textShadow: "0 0 8px rgba(255, 107, 0, 0.5)" }}>◆</span>
                       <div>
-                        <p className="font-medium text-neutral-800">记录 Idea</p>
-                        <p className="text-sm text-neutral-400">快速记下灵感想法</p>
+                        <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>记录 Idea</p>
+                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>快速记下灵感想法</p>
                       </div>
                     </div>
                   </button>
 
+                  {/* Blocker 选项 */}
                   <button
                     onClick={() => setSheetMode("blocker")}
-                    className="w-full p-4 bg-rose-50 rounded-xl text-left hover:bg-rose-100 transition-colors"
+                    className="w-full p-4 rounded-none text-left transition-all duration-200 ease-linear border"
+                    style={{
+                      background: "rgba(255, 0, 255, 0.05)",
+                      borderColor: "rgba(255, 0, 255, 0.3)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(255, 0, 255, 0.1)";
+                      e.currentTarget.style.boxShadow = "0 0 16px rgba(255, 0, 255, 0.2)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(255, 0, 255, 0.05)";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-rose-500 text-lg">▲</span>
+                      <span className="text-lg" style={{ color: "var(--neon-magenta)", textShadow: "0 0 8px rgba(255, 0, 255, 0.5)" }}>▲</span>
                       <div>
-                        <p className="font-medium text-neutral-800">遇到 Blocker</p>
-                        <p className="text-sm text-neutral-400">记录卡住你的问题</p>
+                        <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>遇到 Blocker</p>
+                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>记录卡住你的问题</p>
                       </div>
                     </div>
                   </button>
@@ -601,7 +957,13 @@ export default function Home() {
             ) : (
               <>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-neutral-800">
+                  <h3
+                    className="text-lg font-semibold uppercase tracking-wider"
+                    style={{
+                      fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                      color: "var(--foreground)",
+                    }}
+                  >
                     {editingId ? "编辑" : (
                       <>
                         {sheetMode === "session" && "开始 Session"}
@@ -612,13 +974,19 @@ export default function Home() {
                   </h3>
                   <button
                     onClick={() => editingId ? closeSheet() : setSheetMode("select")}
-                    className="text-neutral-400 hover:text-neutral-600"
+                    className="transition-all duration-200 ease-linear uppercase tracking-wider text-sm"
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      color: "rgba(224, 224, 224, 0.4)",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--neon-magenta)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)"; }}
                   >
                     {editingId ? "取消" : "返回"}
                   </button>
                 </div>
 
-                {/* 输入框 */}
+                {/* 输入框 — 终端风格 */}
                 <textarea
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
@@ -629,7 +997,14 @@ export default function Home() {
                   }
                   autoFocus
                   rows={3}
-                  className="w-full p-4 text-base bg-neutral-50 border-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400 resize-none"
+                  className="w-full p-4 text-base rounded-none border-0 border-b-2 focus:outline-none resize-none"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    background: "rgba(0, 0, 0, 0.4)",
+                    color: "var(--neon-cyan)",
+                    borderBottomColor: "var(--neon-magenta)",
+                    caretColor: "var(--neon-cyan)",
+                  }}
                 />
 
                 {/* 已选图片预览 */}
@@ -640,11 +1015,13 @@ export default function Home() {
                         <img
                           src={img}
                           alt={`图片 ${i + 1}`}
-                          className="w-16 h-16 object-cover rounded-lg"
+                          className="w-16 h-16 object-cover rounded-none border"
+                          style={{ borderColor: "var(--neon-magenta)", opacity: 0.9 }}
                         />
                         <button
                           onClick={() => removeImage(i)}
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-neutral-800 text-white rounded-full text-xs flex items-center justify-center"
+                          className="absolute -top-1 -right-1 w-5 h-5 text-xs flex items-center justify-center rounded-none"
+                          style={{ background: "var(--neon-magenta)", color: "#090014" }}
                         >
                           ×
                         </button>
@@ -653,20 +1030,48 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* 快捷按钮 */}
+                {/* 快捷按钮 — 霓虹边框风格 */}
                 <div className="flex items-center gap-2 mt-3 mb-4">
-                  {/* 标签按钮 */}
                   <button
                     onClick={insertHashtag}
-                    className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors"
+                    className="px-3 py-1.5 rounded-none text-sm transition-all duration-200 ease-linear border"
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      background: "transparent",
+                      color: "var(--neon-cyan)",
+                      borderColor: "rgba(0, 255, 255, 0.3)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(0, 255, 255, 0.1)";
+                      e.currentTarget.style.boxShadow = "0 0 8px rgba(0, 255, 255, 0.3)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
                   >
                     # 标签
                   </button>
 
-                  {/* 图片按钮 - 仅 idea 模式显示 */}
                   {sheetMode === "idea" && (
-                    <label className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors cursor-pointer">
-                      📷 图片
+                    <label
+                      className="px-3 py-1.5 rounded-none text-sm transition-all duration-200 ease-linear border cursor-pointer"
+                      style={{
+                        fontFamily: "var(--font-mono), monospace",
+                        background: "transparent",
+                        color: "var(--neon-orange)",
+                        borderColor: "rgba(255, 107, 0, 0.3)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "rgba(255, 107, 0, 0.1)";
+                        e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 107, 0, 0.3)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.boxShadow = "none";
+                      }}
+                    >
+                      图片
                       <input
                         type="file"
                         accept="image/*"
@@ -677,23 +1082,55 @@ export default function Home() {
                     </label>
                   )}
 
-                  {/* 模板按钮 */}
                   <div className="relative">
                     <button
                       onClick={() => setShowTemplates(!showTemplates)}
-                      className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors"
+                      className="px-3 py-1.5 rounded-none text-sm transition-all duration-200 ease-linear border"
+                      style={{
+                        fontFamily: "var(--font-mono), monospace",
+                        background: "transparent",
+                        color: "var(--neon-magenta)",
+                        borderColor: "rgba(255, 0, 255, 0.3)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "rgba(255, 0, 255, 0.1)";
+                        e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.boxShadow = "none";
+                      }}
                     >
-                      📋 模板
+                      模板
                     </button>
 
                     {/* 模板下拉菜单 */}
                     {showTemplates && (
-                      <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-lg border border-neutral-100 py-2 min-w-[140px] z-10">
+                      <div
+                        className="absolute bottom-full left-0 mb-2 rounded-none py-2 min-w-[140px] z-10 border"
+                        style={{
+                          background: "var(--surface)",
+                          borderColor: "rgba(255, 0, 255, 0.3)",
+                          boxShadow: "0 0 16px rgba(255, 0, 255, 0.15)",
+                        }}
+                      >
                         {templates[sheetMode].map((tpl, i) => (
                           <button
                             key={i}
                             onClick={() => insertTemplate(tpl)}
-                            className="w-full px-4 py-2 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                            className="w-full px-4 py-2 text-left text-sm transition-all duration-200 ease-linear"
+                            style={{
+                              fontFamily: "var(--font-mono), monospace",
+                              color: "var(--foreground)",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = "rgba(255, 0, 255, 0.1)";
+                              e.currentTarget.style.color = "var(--neon-cyan)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = "transparent";
+                              e.currentTarget.style.color = "var(--foreground)";
+                            }}
                           >
                             {tpl}
                           </button>
@@ -703,33 +1140,189 @@ export default function Home() {
                   </div>
                 </div>
 
+                {/* 提交按钮 — 斜切洋红填充 */}
                 <button
                   onClick={handleSubmit}
                   disabled={!inputValue.trim() && images.length === 0}
-                  className="w-full py-4 bg-neutral-900 text-white font-medium rounded-xl hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400 transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-4 font-medium rounded-none uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-200 ease-linear disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    background: "var(--neon-magenta)",
+                    color: "#090014",
+                    transform: "skewX(-12deg)",
+                    boxShadow: "0 0 16px rgba(255, 0, 255, 0.4)",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!e.currentTarget.disabled) {
+                      e.currentTarget.style.boxShadow = "0 0 28px rgba(255, 0, 255, 0.7)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.boxShadow = "0 0 16px rgba(255, 0, 255, 0.4)";
+                  }}
                 >
-                  <span>{editingId ? "保存" : (sheetMode === "session" ? "开始" : "发送")}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 2L11 13"></path>
-                    <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
-                  </svg>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", transform: "skewX(12deg)" }}>
+                    <span>{editingId ? "保存" : (sheetMode === "session" ? "开始" : "发送")}</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 2L11 13"></path>
+                      <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                    </svg>
+                  </span>
                 </button>
               </>
             )}
           </div>
         </>
       )}
+      {/* ========== 侧边栏筛选面板 ========== */}
+      {showFilter && (
+        <>
+          {/* 遮罩 */}
+          <div
+            className="fixed inset-0 z-40"
+            style={{ background: "rgba(9, 0, 20, 0.7)", backdropFilter: "blur(4px)" }}
+            onClick={() => setShowFilter(false)}
+          />
 
-      {/* 动画样式 */}
-      <style jsx>{`
-        @keyframes slide-up {
-          from { transform: translateY(100%); }
-          to { transform: translateY(0); }
-        }
-        .animate-slide-up {
-          animation: slide-up 0.3s ease-out;
-        }
-      `}</style>
+          {/* 侧边栏 */}
+          <div
+            className="fixed top-0 right-0 bottom-0 z-50 w-[280px] animate-slide-in-right border-l-2 flex flex-col"
+            style={{
+              background: "var(--surface)",
+              borderLeftColor: "var(--neon-magenta)",
+              boxShadow: "-4px 0 24px rgba(255, 0, 255, 0.15)",
+            }}
+          >
+            <div className="p-6 flex-1 overflow-y-auto">
+              <h3
+                className="text-lg font-semibold mb-6 uppercase tracking-wider"
+                style={{
+                  fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                  color: "var(--foreground)",
+                  textShadow: "0 0 8px rgba(255, 0, 255, 0.3)",
+                }}
+              >
+                筛选
+              </h3>
+
+              {/* 月份筛选 */}
+              <div className="mb-6">
+                <p
+                  className="text-xs uppercase tracking-widest mb-3"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    color: "var(--neon-cyan)",
+                    textShadow: "0 0 6px rgba(0, 255, 255, 0.3)",
+                  }}
+                >
+                  月份
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {availableMonths.map(month => {
+                    const isSelected = filterMonth === month;
+                    const [y, m] = month.split("-");
+                    const label = `${y}年${parseInt(m)}月`;
+                    return (
+                      <button
+                        key={month}
+                        onClick={() => setFilterMonth(isSelected ? null : month)}
+                        className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+                        style={{
+                          fontFamily: "var(--font-mono), monospace",
+                          background: isSelected ? "var(--neon-cyan)" : "transparent",
+                          color: isSelected ? "#090014" : "var(--neon-cyan)",
+                          borderColor: "var(--neon-cyan)",
+                          boxShadow: isSelected ? "0 0 12px rgba(0, 255, 255, 0.4)" : "none",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                  {availableMonths.length === 0 && (
+                    <p
+                      className="text-xs"
+                      style={{ fontFamily: "var(--font-mono), monospace", color: "rgba(224, 224, 224, 0.3)" }}
+                    >
+                      暂无数据
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* 内容筛选 */}
+              <div className="mb-6">
+                <p
+                  className="text-xs uppercase tracking-widest mb-3"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    color: "var(--neon-cyan)",
+                    textShadow: "0 0 6px rgba(0, 255, 255, 0.3)",
+                  }}
+                >
+                  内容
+                </p>
+                <button
+                  onClick={() => setFilterHasImages(!filterHasImages)}
+                  className="flex items-center gap-3 w-full px-3 py-2 rounded-none text-sm transition-all duration-200 ease-linear border"
+                  style={{
+                    fontFamily: "var(--font-mono), monospace",
+                    background: filterHasImages ? "rgba(255, 107, 0, 0.1)" : "transparent",
+                    color: filterHasImages ? "var(--neon-orange)" : "rgba(224, 224, 224, 0.5)",
+                    borderColor: filterHasImages ? "var(--neon-orange)" : "rgba(224, 224, 224, 0.15)",
+                  }}
+                >
+                  <span
+                    className="w-8 h-4 rounded-none relative transition-all duration-200 ease-linear"
+                    style={{
+                      background: filterHasImages ? "var(--neon-orange)" : "rgba(224, 224, 224, 0.15)",
+                      boxShadow: filterHasImages ? "0 0 8px rgba(255, 107, 0, 0.4)" : "none",
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 w-3 h-3 rounded-none transition-all duration-200 ease-linear"
+                      style={{
+                        background: filterHasImages ? "#090014" : "rgba(224, 224, 224, 0.4)",
+                        left: filterHasImages ? "calc(100% - 14px)" : "2px",
+                      }}
+                    />
+                  </span>
+                  有图片
+                </button>
+              </div>
+            </div>
+
+            {/* 底部重置按钮 */}
+            <div className="p-6 pt-0">
+              <button
+                onClick={resetFilters}
+                className="w-full py-3 text-sm rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+                style={{
+                  fontFamily: "var(--font-mono), monospace",
+                  background: "transparent",
+                  color: "var(--neon-cyan)",
+                  borderColor: "var(--neon-cyan)",
+                  textShadow: "0 0 6px rgba(0, 255, 255, 0.3)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--neon-cyan)";
+                  e.currentTarget.style.color = "#090014";
+                  e.currentTarget.style.textShadow = "none";
+                  e.currentTarget.style.boxShadow = "0 0 16px rgba(0, 255, 255, 0.4)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "var(--neon-cyan)";
+                  e.currentTarget.style.textShadow = "0 0 6px rgba(0, 255, 255, 0.3)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                重置筛选
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }
