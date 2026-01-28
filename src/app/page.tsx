@@ -1,15 +1,25 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Session, Blocker, Idea } from "@/types";
+import { supabase } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 export default function Home() {
+  const router = useRouter();
+
+  // ========== 认证状态 ==========
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   // ========== 数据状态 ==========
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [blockers, setBlockers] = useState<Blocker[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [dataLoading, setDataLoading] = useState(true);
 
   // ========== UI 状态 ==========
   const [showSheet, setShowSheet] = useState(false);
@@ -28,40 +38,54 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingType, setEditingType] = useState<"session" | "idea" | "blocker" | null>(null);
 
-  // ========== 加载数据 ==========
+  // ========== 认证检查 ==========
   useEffect(() => {
-    const savedIdeas = localStorage.getItem("vibelog-ideas-v2");
-    if (savedIdeas) {
-      setIdeas(JSON.parse(savedIdeas));
-    } else {
-      // 迁移旧数据
-      const oldIdeas = localStorage.getItem("vibelog-ideas");
-      if (oldIdeas) {
-        const parsed = JSON.parse(oldIdeas);
-        if (Array.isArray(parsed) && typeof parsed[0] === "string") {
-          const migrated = parsed.map((content: string, i: number) => ({
-            id: `migrated-${i}`,
-            content,
-            createdAt: new Date().toISOString(),
-          }));
-          setIdeas(migrated);
-        }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+      } else {
+        router.replace("/login");
       }
-    }
+      setAuthLoading(false);
+    });
 
-    const savedSessions = localStorage.getItem("vibelog-sessions");
-    if (savedSessions) {
-      const parsed: Session[] = JSON.parse(savedSessions);
-      setSessions(parsed);
-      const active = parsed.find(s => s.status === "active");
-      if (active) setActiveSession(active);
-    }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+      } else {
+        setUser(null);
+        router.replace("/login");
+      }
+    });
 
-    const savedBlockers = localStorage.getItem("vibelog-blockers");
-    if (savedBlockers) {
-      setBlockers(JSON.parse(savedBlockers));
+    return () => subscription.unsubscribe();
+  }, [router]);
+
+  // ========== 加载数据 ==========
+  const loadData = useCallback(async () => {
+    if (!user) return;
+    setDataLoading(true);
+
+    const [sessionsRes, ideasRes, blockersRes] = await Promise.all([
+      supabase.from("sessions").select("*").order("start_time", { ascending: false }),
+      supabase.from("ideas").select("*").order("created_at", { ascending: false }),
+      supabase.from("blockers").select("*").order("created_at", { ascending: false }),
+    ]);
+
+    if (sessionsRes.data) {
+      setSessions(sessionsRes.data);
+      const active = sessionsRes.data.find((s: Session) => s.status === "active");
+      setActiveSession(active || null);
     }
-  }, []);
+    if (ideasRes.data) setIdeas(ideasRes.data);
+    if (blockersRes.data) setBlockers(blockersRes.data);
+
+    setDataLoading(false);
+  }, [user]);
+
+  useEffect(() => {
+    if (user) loadData();
+  }, [user, loadData]);
 
   // ========== 计时器 ==========
   useEffect(() => {
@@ -69,7 +93,7 @@ export default function Home() {
       setElapsedTime(0);
       return;
     }
-    const startTime = new Date(activeSession.startTime).getTime();
+    const startTime = new Date(activeSession.start_time).getTime();
     const updateElapsed = () => {
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     };
@@ -78,18 +102,10 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [activeSession]);
 
-  // ========== 保存数据 ==========
-  useEffect(() => {
-    localStorage.setItem("vibelog-ideas-v2", JSON.stringify(ideas));
-  }, [ideas]);
-
-  useEffect(() => {
-    localStorage.setItem("vibelog-sessions", JSON.stringify(sessions));
-  }, [sessions]);
-
-  useEffect(() => {
-    localStorage.setItem("vibelog-blockers", JSON.stringify(blockers));
-  }, [blockers]);
+  // ========== 登出 ==========
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   // ========== 工具函数 ==========
   const formatTime = (seconds: number): string => {
@@ -125,8 +141,8 @@ export default function Home() {
   };
 
   const getSessionDuration = (session: Session): number => {
-    if (!session.endTime) return 0;
-    return Math.floor((new Date(session.endTime).getTime() - new Date(session.startTime).getTime()) / 1000);
+    if (!session.end_time) return 0;
+    return Math.floor((new Date(session.end_time).getTime() - new Date(session.start_time).getTime()) / 1000);
   };
 
   // ========== 操作函数 ==========
@@ -167,17 +183,19 @@ export default function Home() {
   };
 
   // 继续 Session
-  const continueSession = (goal: string) => {
-    if (activeSession) return;
-    const newSession: Session = {
-      id: Date.now().toString(),
+  const continueSession = async (goal: string) => {
+    if (activeSession || !user) return;
+    const { data, error } = await supabase.from("sessions").insert({
+      user_id: user.id,
       goal,
-      startTime: new Date().toISOString(),
-      endTime: null,
+      start_time: new Date().toISOString(),
       status: "active",
-    };
-    setSessions([newSession, ...sessions]);
-    setActiveSession(newSession);
+    }).select().single();
+
+    if (!error && data) {
+      setSessions([data, ...sessions]);
+      setActiveSession(data);
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,77 +250,99 @@ export default function Home() {
     ],
   };
 
-  const startSession = () => {
-    if (!inputValue.trim() || activeSession) return;
-    const newSession: Session = {
-      id: Date.now().toString(),
+  const startSession = async () => {
+    if (!inputValue.trim() || activeSession || !user) return;
+    const { data, error } = await supabase.from("sessions").insert({
+      user_id: user.id,
       goal: inputValue.trim(),
-      startTime: new Date().toISOString(),
-      endTime: null,
+      start_time: new Date().toISOString(),
       status: "active",
-    };
-    setSessions([newSession, ...sessions]);
-    setActiveSession(newSession);
-    closeSheet();
+    }).select().single();
+
+    if (!error && data) {
+      setSessions([data, ...sessions]);
+      setActiveSession(data);
+      closeSheet();
+    }
   };
 
-  const endSession = () => {
+  const endSession = async () => {
     if (!activeSession) return;
-    const updated = sessions.map(s =>
-      s.id === activeSession.id
-        ? { ...s, endTime: new Date().toISOString(), status: "completed" as const }
-        : s
-    );
-    setSessions(updated);
-    setActiveSession(null);
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("sessions").update({
+      end_time: now,
+      status: "completed",
+    }).eq("id", activeSession.id);
+
+    if (!error) {
+      setSessions(sessions.map(s =>
+        s.id === activeSession.id
+          ? { ...s, end_time: now, status: "completed" as const }
+          : s
+      ));
+      setActiveSession(null);
+    }
   };
 
-  const addIdea = () => {
-    if (!inputValue.trim() && images.length === 0) return;
-    const newIdea: Idea = {
-      id: Date.now().toString(),
+  const addIdea = async () => {
+    if ((!inputValue.trim() && images.length === 0) || !user) return;
+    const { data, error } = await supabase.from("ideas").insert({
+      user_id: user.id,
       content: inputValue.trim(),
-      createdAt: new Date().toISOString(),
-      images: images.length > 0 ? images : undefined,
-    };
-    setIdeas([newIdea, ...ideas]);
-    closeSheet();
+      images: images.length > 0 ? images : null,
+    }).select().single();
+
+    if (!error && data) {
+      setIdeas([data, ...ideas]);
+      closeSheet();
+    }
   };
 
-  const addBlocker = () => {
-    if (!inputValue.trim()) return;
-    const newBlocker: Blocker = {
-      id: Date.now().toString(),
+  const addBlocker = async () => {
+    if (!inputValue.trim() || !user) return;
+    const { data, error } = await supabase.from("blockers").insert({
+      user_id: user.id,
       problem: inputValue.trim(),
-      solution: null,
       status: "open",
-      createdAt: new Date().toISOString(),
-      resolvedAt: null,
-    };
-    setBlockers([newBlocker, ...blockers]);
-    closeSheet();
+    }).select().single();
+
+    if (!error && data) {
+      setBlockers([data, ...blockers]);
+      closeSheet();
+    }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (editingId) {
       if (editingType === "session") {
-        setSessions(sessions.map(s =>
-          s.id === editingId ? { ...s, goal: inputValue.trim() } : s
-        ));
+        const { error } = await supabase.from("sessions").update({ goal: inputValue.trim() }).eq("id", editingId);
+        if (!error) {
+          setSessions(sessions.map(s =>
+            s.id === editingId ? { ...s, goal: inputValue.trim() } : s
+          ));
+        }
       } else if (editingType === "idea") {
-        setIdeas(ideas.map(i =>
-          i.id === editingId ? { ...i, content: inputValue.trim(), images: images.length > 0 ? images : i.images } : i
-        ));
+        const updates: { content: string; images?: string[] | null } = { content: inputValue.trim() };
+        if (images.length > 0) updates.images = images;
+        const { error } = await supabase.from("ideas").update(updates).eq("id", editingId);
+        if (!error) {
+          setIdeas(ideas.map(i =>
+            i.id === editingId ? { ...i, content: inputValue.trim(), images: images.length > 0 ? images : i.images } : i
+          ));
+        }
       } else if (editingType === "blocker") {
-        setBlockers(blockers.map(b =>
-          b.id === editingId ? { ...b, problem: inputValue.trim() } : b
-        ));
+        const { error } = await supabase.from("blockers").update({ problem: inputValue.trim() }).eq("id", editingId);
+        if (!error) {
+          setBlockers(blockers.map(b =>
+            b.id === editingId ? { ...b, problem: inputValue.trim() } : b
+          ));
+        }
       }
       closeSheet();
     } else {
-      if (sheetMode === "session") startSession();
-      else if (sheetMode === "idea") addIdea();
-      else if (sheetMode === "blocker") addBlocker();
+      if (sheetMode === "session") await startSession();
+      else if (sheetMode === "idea") await addIdea();
+      else if (sheetMode === "blocker") await addBlocker();
     }
   };
 
@@ -329,40 +369,40 @@ export default function Home() {
     }>> = new Map();
 
     sessions.filter(s => s.status === "completed").forEach(s => {
-      const dateKey = getDateKey(new Date(s.startTime));
+      const dateKey = getDateKey(new Date(s.start_time));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
       groups.get(dateKey)!.push({
         id: s.id,
         type: "session",
         content: s.goal,
-        time: new Date(s.startTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-        timestamp: new Date(s.startTime),
+        time: new Date(s.start_time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(s.start_time),
         meta: { duration: formatDuration(getSessionDuration(s)) },
       });
     });
 
     ideas.forEach(idea => {
-      const dateKey = getDateKey(new Date(idea.createdAt));
+      const dateKey = getDateKey(new Date(idea.created_at));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
       groups.get(dateKey)!.push({
         id: idea.id,
         type: "idea",
         content: idea.content,
-        time: new Date(idea.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-        timestamp: new Date(idea.createdAt),
+        time: new Date(idea.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(idea.created_at),
         images: idea.images,
       });
     });
 
     blockers.forEach(b => {
-      const dateKey = getDateKey(new Date(b.createdAt));
+      const dateKey = getDateKey(new Date(b.created_at));
       if (!groups.has(dateKey)) groups.set(dateKey, []);
       groups.get(dateKey)!.push({
         id: b.id,
         type: "blocker",
         content: b.problem,
-        time: new Date(b.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-        timestamp: new Date(b.createdAt),
+        time: new Date(b.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(b.created_at),
         meta: { solution: b.solution || undefined, status: b.status },
       });
     });
@@ -383,13 +423,13 @@ export default function Home() {
   const availableMonths = useMemo(() => {
     const monthSet = new Set<string>();
     sessions.filter(s => s.status === "completed").forEach(s => {
-      monthSet.add(new Date(s.startTime).toISOString().slice(0, 7));
+      monthSet.add(new Date(s.start_time).toISOString().slice(0, 7));
     });
     ideas.forEach(i => {
-      monthSet.add(new Date(i.createdAt).toISOString().slice(0, 7));
+      monthSet.add(new Date(i.created_at).toISOString().slice(0, 7));
     });
     blockers.forEach(b => {
-      monthSet.add(new Date(b.createdAt).toISOString().slice(0, 7));
+      monthSet.add(new Date(b.created_at).toISOString().slice(0, 7));
     });
     return Array.from(monthSet).sort().reverse();
   }, [sessions, ideas, blockers]);
@@ -398,7 +438,7 @@ export default function Home() {
   const hasActiveFilter = activeTab !== "all" || filterMonth !== null || filterHasImages;
 
   const groupedRecords = useMemo(() => {
-    let filtered = allGroupedRecords.map(group => ({
+    const filtered = allGroupedRecords.map(group => ({
       ...group,
       items: group.items.filter(item => {
         if (activeTab !== "all" && item.type !== activeTab) return false;
@@ -426,6 +466,25 @@ export default function Home() {
     return <span className="text-[var(--neon-magenta)]">▲</span>;
   };
 
+  // ========== Loading 状态 ==========
+  if (authLoading || dataLoading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--background)" }}>
+        <p
+          className="text-sm uppercase tracking-widest"
+          style={{
+            fontFamily: "var(--font-mono), monospace",
+            color: "var(--neon-cyan)",
+            textShadow: "0 0 12px rgba(0, 255, 255, 0.5)",
+            animation: "status-pulse 2s ease-in-out infinite",
+          }}
+        >
+          加载中...
+        </p>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen relative z-[1]" style={{ background: "var(--background)" }}>
       {/* ========== 顶部区域 ========== */}
@@ -437,28 +496,53 @@ export default function Home() {
         }}
       >
         <div className="max-w-lg mx-auto px-5 py-6">
-          <h1
-            className="text-2xl font-bold tracking-wider"
-            style={{
-              fontFamily: "var(--font-heading), Orbitron, sans-serif",
-              background: "linear-gradient(90deg, #FF6B00, #FF00FF, #00FFFF)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              filter: "drop-shadow(0 0 12px rgba(255, 0, 255, 0.5))",
-            }}
-          >
-            VibeLog
-          </h1>
-          <p
-            className="text-sm mt-1 tracking-wide"
-            style={{
-              fontFamily: "var(--font-mono), monospace",
-              color: "var(--neon-cyan)",
-              textShadow: "0 0 8px rgba(0, 255, 255, 0.4)",
-            }}
-          >
-            {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1
+                className="text-2xl font-bold tracking-wider"
+                style={{
+                  fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                  background: "linear-gradient(90deg, #FF6B00, #FF00FF, #00FFFF)",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  filter: "drop-shadow(0 0 12px rgba(255, 0, 255, 0.5))",
+                }}
+              >
+                VibeLog
+              </h1>
+              <p
+                className="text-sm mt-1 tracking-wide"
+                style={{
+                  fontFamily: "var(--font-mono), monospace",
+                  color: "var(--neon-cyan)",
+                  textShadow: "0 0 8px rgba(0, 255, 255, 0.4)",
+                }}
+              >
+                {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
+              </p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                color: "rgba(224, 224, 224, 0.4)",
+                borderColor: "rgba(224, 224, 224, 0.15)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--neon-magenta)";
+                e.currentTarget.style.borderColor = "var(--neon-magenta)";
+                e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)";
+                e.currentTarget.style.borderColor = "rgba(224, 224, 224, 0.15)";
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              登出
+            </button>
+          </div>
         </div>
       </div>
 
@@ -996,7 +1080,7 @@ export default function Home() {
                     "什么问题卡住了你？"
                   }
                   autoFocus
-                  rows={3}
+                  rows={typeof window !== "undefined" && window.innerWidth < 640 ? 5 : 3}
                   className="w-full p-4 text-base rounded-none border-0 border-b-2 focus:outline-none resize-none"
                   style={{
                     fontFamily: "var(--font-mono), monospace",
