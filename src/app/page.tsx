@@ -1,44 +1,55 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Session, Blocker } from "@/types";
+import { Session, Blocker, Idea } from "@/types";
 
 export default function Home() {
-  // ========== Idea 相关状态 ==========
-  const [inputValue, setInputValue] = useState("");
-  const [ideas, setIdeas] = useState<string[]>([]);
-
-  // ========== Session 相关状态 ==========
-  const [goalInput, setGoalInput] = useState("");
+  // ========== 数据状态 ==========
+  const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [blockers, setBlockers] = useState<Blocker[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
 
-  // ========== Blocker 相关状态 ==========
-  const [blockerInput, setBlockerInput] = useState("");
-  const [blockers, setBlockers] = useState<Blocker[]>([]);
-  const [resolvingId, setResolvingId] = useState<string | null>(null);
-  const [solutionInput, setSolutionInput] = useState("");
+  // ========== UI 状态 ==========
+  const [showSheet, setShowSheet] = useState(false);
+  const [sheetMode, setSheetMode] = useState<"select" | "session" | "idea" | "blocker">("select");
+  const [inputValue, setInputValue] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
 
-  // ========== 小红书草稿状态 ==========
-  const [xiaohongshuDraft, setXiaohongshuDraft] = useState<string | null>(null);
-  const [copySuccess, setCopySuccess] = useState(false);
+  // ========== 编辑状态 ==========
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingType, setEditingType] = useState<"session" | "idea" | "blocker" | null>(null);
 
   // ========== 加载数据 ==========
   useEffect(() => {
-    const savedIdeas = localStorage.getItem("vibelog-ideas");
+    const savedIdeas = localStorage.getItem("vibelog-ideas-v2");
     if (savedIdeas) {
       setIdeas(JSON.parse(savedIdeas));
+    } else {
+      // 迁移旧数据
+      const oldIdeas = localStorage.getItem("vibelog-ideas");
+      if (oldIdeas) {
+        const parsed = JSON.parse(oldIdeas);
+        if (Array.isArray(parsed) && typeof parsed[0] === "string") {
+          // 旧格式是字符串数组，转换为新格式
+          const migrated = parsed.map((content: string, i: number) => ({
+            id: `migrated-${i}`,
+            content,
+            createdAt: new Date().toISOString(),
+          }));
+          setIdeas(migrated);
+        }
+      }
     }
 
     const savedSessions = localStorage.getItem("vibelog-sessions");
     if (savedSessions) {
-      const parsedSessions: Session[] = JSON.parse(savedSessions);
-      setSessions(parsedSessions);
-      const active = parsedSessions.find(s => s.status === "active");
-      if (active) {
-        setActiveSession(active);
-      }
+      const parsed: Session[] = JSON.parse(savedSessions);
+      setSessions(parsed);
+      const active = parsed.find(s => s.status === "active");
+      if (active) setActiveSession(active);
     }
 
     const savedBlockers = localStorage.getItem("vibelog-blockers");
@@ -53,14 +64,10 @@ export default function Home() {
       setElapsedTime(0);
       return;
     }
-
     const startTime = new Date(activeSession.startTime).getTime();
     const updateElapsed = () => {
-      const now = Date.now();
-      const seconds = Math.floor((now - startTime) / 1000);
-      setElapsedTime(seconds);
+      setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     };
-
     updateElapsed();
     const interval = setInterval(updateElapsed, 1000);
     return () => clearInterval(interval);
@@ -68,7 +75,7 @@ export default function Home() {
 
   // ========== 保存数据 ==========
   useEffect(() => {
-    localStorage.setItem("vibelog-ideas", JSON.stringify(ideas));
+    localStorage.setItem("vibelog-ideas-v2", JSON.stringify(ideas));
   }, [ideas]);
 
   useEffect(() => {
@@ -80,845 +87,649 @@ export default function Home() {
   }, [blockers]);
 
   // ========== 工具函数 ==========
-  const isToday = (dateString: string): boolean => {
-    const date = new Date(dateString);
-    const today = new Date();
-    return date.toDateString() === today.toDateString();
+  const formatTime = (seconds: number): string => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const formatTime = (totalSeconds: number): string => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    } else {
-      return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-    }
+  const formatDuration = (seconds: number): string => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    if (m > 0) return `${m}m`;
+    return `${seconds}s`;
   };
 
-  const formatDuration = (totalSeconds: number): string => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-
-    if (hours > 0 && minutes > 0) {
-      return `${hours}h ${minutes}m`;
-    } else if (hours > 0) {
-      return `${hours}h`;
-    } else if (minutes > 0) {
-      return `${minutes}m`;
-    } else {
-      return `${totalSeconds}s`;
-    }
-  };
-
-  const getSessionDuration = (session: Session): string => {
-    if (!session.endTime) return "—";
-
-    const start = new Date(session.startTime).getTime();
-    const end = new Date(session.endTime).getTime();
-    const totalSeconds = Math.floor((end - start) / 1000);
-
-    return formatTime(totalSeconds);
-  };
-
-  const getSessionDurationSeconds = (session: Session): number => {
-    if (!session.endTime) return 0;
-    const start = new Date(session.startTime).getTime();
-    const end = new Date(session.endTime).getTime();
-    return Math.floor((end - start) / 1000);
-  };
-
-  // ========== 今日数据 ==========
-  const todaySessions = sessions.filter(s => s.status === "completed" && isToday(s.startTime));
-  const todayTotalSeconds = todaySessions.reduce((acc, s) => acc + getSessionDurationSeconds(s), 0);
-  const todayBlockersResolved = blockers.filter(b => b.status === "resolved" && b.resolvedAt && isToday(b.resolvedAt));
-  const todayBlockersCreated = blockers.filter(b => isToday(b.createdAt));
-
-  // ========== 热力图数据计算 ==========
-  // 获取日期字符串（用于比较）
   const getDateKey = (date: Date): string => {
-    return date.toISOString().split('T')[0]; // "2025-01-28"
+    return date.toISOString().split('T')[0];
   };
 
-  // 统计每天的 session 数量
-  const getActivityByDate = (): Map<string, number> => {
-    const activityMap = new Map<string, number>();
-    sessions.filter(s => s.status === "completed").forEach(session => {
-      const dateKey = getDateKey(new Date(session.startTime));
-      activityMap.set(dateKey, (activityMap.get(dateKey) || 0) + 1);
-    });
-    return activityMap;
-  };
-
-  // 生成热力图网格（过去 16 周 = 112 天）
-  const generateHeatmapData = () => {
-    const activityMap = getActivityByDate();
+  const formatDateHeader = (dateKey: string): string => {
+    const date = new Date(dateKey);
     const today = new Date();
-    const days: { date: Date; dateKey: string; count: number }[] = [];
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
 
-    // 往前推 111 天（加上今天共 112 天，约 16 周）
-    for (let i = 111; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - i);
-      const dateKey = getDateKey(date);
-      days.push({
-        date,
-        dateKey,
-        count: activityMap.get(dateKey) || 0
-      });
-    }
-
-    return days;
+    if (dateKey === getDateKey(today)) return "今天";
+    if (dateKey === getDateKey(yesterday)) return "昨天";
+    return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
   };
 
-  // 获取活动等级（0-4，用于颜色深浅）
-  const getActivityLevel = (count: number): number => {
-    if (count === 0) return 0;
-    if (count === 1) return 1;
-    if (count === 2) return 2;
-    if (count <= 4) return 3;
-    return 4;
+  const getSessionDuration = (session: Session): number => {
+    if (!session.endTime) return 0;
+    return Math.floor((new Date(session.endTime).getTime() - new Date(session.startTime).getTime()) / 1000);
   };
 
-  // 获取月份标签
-  const getMonthLabels = (days: { date: Date }[]) => {
-    const labels: { month: string; index: number }[] = [];
-    let lastMonth = -1;
-
-    days.forEach((day, index) => {
-      const month = day.date.getMonth();
-      if (month !== lastMonth) {
-        labels.push({
-          month: day.date.toLocaleDateString('en-US', { month: 'short' }),
-          index
-        });
-        lastMonth = month;
-      }
-    });
-
-    return labels;
-  };
-
-  const heatmapData = generateHeatmapData();
-  const monthLabels = getMonthLabels(heatmapData);
-
-  // 计算总天数（有活动的天数）
-  const totalActiveDays = new Set(
-    sessions
-      .filter(s => s.status === "completed")
-      .map(s => getDateKey(new Date(s.startTime)))
-  ).size;
-
-  // ========== 获取已完成的 Sessions ==========
-  const completedSessions = sessions.filter(s => s.status === "completed");
-
-  // ========== 获取 Blockers ==========
-  const openBlockers = blockers.filter(b => b.status === "open");
-  const resolvedBlockers = blockers.filter(b => b.status === "resolved");
-
-  // ========== Idea 功能 ==========
-  const saveIdea = () => {
-    if (inputValue.trim() === "") return;
-    setIdeas([...ideas, inputValue]);
+  // ========== 操作函数 ==========
+  const openSheet = (mode: "select" | "session" | "idea" | "blocker") => {
+    setSheetMode(mode);
+    setShowSheet(true);
     setInputValue("");
   };
 
-  const handleIdeaKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      saveIdea();
-    }
+  const closeSheet = () => {
+    setShowSheet(false);
+    setSheetMode("select");
+    setInputValue("");
+    setImages([]);
+    setShowTemplates(false);
+    setEditingId(null);
+    setEditingType(null);
   };
 
-  // ========== Session 功能 ==========
-  const startSession = () => {
-    if (activeSession) return;
-    if (goalInput.trim() === "") return;
+  // ========== 快捷输入功能 ==========
+  const insertHashtag = () => {
+    setInputValue(prev => prev + " #");
+  };
 
+  // 高亮标签的函数
+  const renderContentWithTags = (content: string) => {
+    // 匹配 #标签 格式（支持中英文）
+    const parts = content.split(/(#[\w\u4e00-\u9fa5]+)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('#')) {
+        return (
+          <span key={i} className="text-blue-500 bg-blue-50 px-1 rounded">
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  };
+
+  // 继续 Session（以相同目标开始新 Session）
+  const continueSession = (goal: string) => {
+    if (activeSession) return; // 已有进行中的 session
     const newSession: Session = {
       id: Date.now().toString(),
-      goal: goalInput,
+      goal,
       startTime: new Date().toISOString(),
       endTime: null,
       status: "active",
     };
-
     setSessions([newSession, ...sessions]);
     setActiveSession(newSession);
-    setGoalInput("");
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      if (file.size > 5 * 1024 * 1024) {
+        alert("图片太大，请选择 5MB 以内的图片");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = event.target?.result as string;
+        setImages(prev => [...prev, base64]);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // 清空 input 以便重复选择
+    e.target.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const insertTemplate = (template: string) => {
+    setInputValue(prev => prev + template);
+    setShowTemplates(false);
+  };
+
+  // 模板列表
+  const templates = {
+    session: [
+      "实现功能：",
+      "修复 bug：",
+      "学习：",
+      "重构：",
+    ],
+    idea: [
+      "💡 想法：",
+      "📝 待办：",
+      "🎯 目标：",
+      "❓ 问题：",
+    ],
+    blocker: [
+      "报错信息：",
+      "不理解：",
+      "配置问题：",
+      "找不到：",
+    ],
+  };
+
+  const startSession = () => {
+    if (!inputValue.trim() || activeSession) return;
+    const newSession: Session = {
+      id: Date.now().toString(),
+      goal: inputValue.trim(),
+      startTime: new Date().toISOString(),
+      endTime: null,
+      status: "active",
+    };
+    setSessions([newSession, ...sessions]);
+    setActiveSession(newSession);
+    closeSheet();
   };
 
   const endSession = () => {
     if (!activeSession) return;
-
-    const endTime = new Date().toISOString();
-    const updatedSessions = sessions.map(session => {
-      if (session.id === activeSession.id) {
-        return {
-          ...session,
-          endTime: endTime,
-          status: "completed" as const,
-        };
-      }
-      return session;
-    });
-
-    setSessions(updatedSessions);
+    const updated = sessions.map(s =>
+      s.id === activeSession.id
+        ? { ...s, endTime: new Date().toISOString(), status: "completed" as const }
+        : s
+    );
+    setSessions(updated);
     setActiveSession(null);
   };
 
-  // ========== Blocker 功能 ==========
-  const addBlocker = () => {
-    if (blockerInput.trim() === "") return;
+  const addIdea = () => {
+    if (!inputValue.trim() && images.length === 0) return;
+    const newIdea: Idea = {
+      id: Date.now().toString(),
+      content: inputValue.trim(),
+      createdAt: new Date().toISOString(),
+      images: images.length > 0 ? images : undefined,
+    };
+    setIdeas([newIdea, ...ideas]);
+    closeSheet();
+  };
 
+  const addBlocker = () => {
+    if (!inputValue.trim()) return;
     const newBlocker: Blocker = {
       id: Date.now().toString(),
-      problem: blockerInput,
+      problem: inputValue.trim(),
       solution: null,
       status: "open",
       createdAt: new Date().toISOString(),
       resolvedAt: null,
     };
-
     setBlockers([newBlocker, ...blockers]);
-    setBlockerInput("");
+    closeSheet();
   };
 
-  const handleBlockerKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      addBlocker();
-    }
-  };
-
-  const startResolving = (id: string) => {
-    setResolvingId(id);
-    setSolutionInput("");
-  };
-
-  const cancelResolving = () => {
-    setResolvingId(null);
-    setSolutionInput("");
-  };
-
-  const resolveBlocker = (id: string) => {
-    if (solutionInput.trim() === "") return;
-
-    const updatedBlockers = blockers.map(blocker => {
-      if (blocker.id === id) {
-        return {
-          ...blocker,
-          solution: solutionInput,
-          status: "resolved" as const,
-          resolvedAt: new Date().toISOString(),
-        };
+  const handleSubmit = () => {
+    if (editingId) {
+      // 编辑模式
+      if (editingType === "session") {
+        setSessions(sessions.map(s =>
+          s.id === editingId ? { ...s, goal: inputValue.trim() } : s
+        ));
+      } else if (editingType === "idea") {
+        setIdeas(ideas.map(i =>
+          i.id === editingId ? { ...i, content: inputValue.trim(), images: images.length > 0 ? images : i.images } : i
+        ));
+      } else if (editingType === "blocker") {
+        setBlockers(blockers.map(b =>
+          b.id === editingId ? { ...b, problem: inputValue.trim() } : b
+        ));
       }
-      return blocker;
+      closeSheet();
+    } else {
+      // 新建模式
+      if (sheetMode === "session") startSession();
+      else if (sheetMode === "idea") addIdea();
+      else if (sheetMode === "blocker") addBlocker();
+    }
+  };
+
+  // 开始编辑
+  const startEditing = (id: string, type: "session" | "idea" | "blocker", content: string, itemImages?: string[]) => {
+    setEditingId(id);
+    setEditingType(type);
+    setSheetMode(type);
+    setInputValue(content);
+    setImages(itemImages || []);
+    setShowSheet(true);
+  };
+
+  // ========== 按日期分组记录 ==========
+  const getGroupedRecords = () => {
+    const groups: Map<string, Array<{
+      id: string;
+      type: "session" | "idea" | "blocker";
+      content: string;
+      time: string;
+      timestamp: Date;
+      images?: string[];
+      meta?: { duration?: string; solution?: string; status?: string };
+    }>> = new Map();
+
+    // 添加已完成的 sessions
+    sessions.filter(s => s.status === "completed").forEach(s => {
+      const dateKey = getDateKey(new Date(s.startTime));
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey)!.push({
+        id: s.id,
+        type: "session",
+        content: s.goal,
+        time: new Date(s.startTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(s.startTime),
+        meta: { duration: formatDuration(getSessionDuration(s)) },
+      });
     });
 
-    setBlockers(updatedBlockers);
-    setResolvingId(null);
-    setSolutionInput("");
-  };
-
-  // ========== 格式化今天的日期 ==========
-  const todayFormatted = new Date().toLocaleDateString([], {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric'
-  });
-
-  // ========== 导出功能 ==========
-  // 下载文件的通用函数
-  const downloadFile = (content: string, filename: string, type: string) => {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // JSON 导出
-  const exportJSON = () => {
-    const data = {
-      exportedAt: new Date().toISOString(),
-      sessions,
-      blockers,
-      ideas,
-    };
-    const json = JSON.stringify(data, null, 2);
-    const date = new Date().toISOString().split('T')[0];
-    downloadFile(json, `vibelog-export-${date}.json`, 'application/json');
-  };
-
-  // Markdown 导出
-  const exportMarkdown = () => {
-    const date = new Date().toLocaleDateString('zh-CN', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
+    // 添加 ideas
+    ideas.forEach(idea => {
+      const dateKey = getDateKey(new Date(idea.createdAt));
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey)!.push({
+        id: idea.id,
+        type: "idea",
+        content: idea.content,
+        time: new Date(idea.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(idea.createdAt),
+        images: idea.images,
+      });
     });
 
-    let md = `# VibeLog 导出\n\n`;
-    md += `> 导出时间：${date}\n\n`;
-
-    // 统计概览
-    md += `## 📊 统计概览\n\n`;
-    md += `- **总 Sessions**：${completedSessions.length} 次\n`;
-    md += `- **总编码时间**：${formatDuration(completedSessions.reduce((acc, s) => acc + getSessionDurationSeconds(s), 0))}\n`;
-    md += `- **解决问题**：${resolvedBlockers.length} 个\n`;
-    md += `- **活跃天数**：${totalActiveDays} 天\n\n`;
-
-    // Sessions
-    if (completedSessions.length > 0) {
-      md += `## 🎯 Sessions\n\n`;
-      completedSessions.forEach((s) => {
-        const startDate = new Date(s.startTime).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-        const startTime = new Date(s.startTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        md += `- **${s.goal}** — ${startDate} ${startTime}（${getSessionDuration(s)}）\n`;
+    // 添加 blockers
+    blockers.forEach(b => {
+      const dateKey = getDateKey(new Date(b.createdAt));
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey)!.push({
+        id: b.id,
+        type: "blocker",
+        content: b.problem,
+        time: new Date(b.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(b.createdAt),
+        meta: { solution: b.solution || undefined, status: b.status },
       });
-      md += `\n`;
-    }
+    });
 
-    // Blockers
-    if (resolvedBlockers.length > 0) {
-      md += `## 🔧 解决的问题\n\n`;
-      resolvedBlockers.forEach((b) => {
-        md += `### ${b.problem}\n`;
-        md += `**解决方案**：${b.solution}\n\n`;
-      });
-    }
+    // 按日期排序（最新的在前），每组内按时间排序
+    const sortedGroups = Array.from(groups.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([dateKey, items]) => ({
+        dateKey,
+        items: items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
+      }));
 
-    if (openBlockers.length > 0) {
-      md += `## ⚠️ 待解决问题\n\n`;
-      openBlockers.forEach((b) => {
-        md += `- ${b.problem}\n`;
-      });
-      md += `\n`;
-    }
-
-    // Ideas
-    if (ideas.length > 0) {
-      md += `## 💡 Ideas\n\n`;
-      ideas.forEach((idea) => {
-        md += `- ${idea}\n`;
-      });
-      md += `\n`;
-    }
-
-    md += `---\n\n*由 VibeLog 生成*\n`;
-
-    const exportDate = new Date().toISOString().split('T')[0];
-    downloadFile(md, `vibelog-export-${exportDate}.md`, 'text/markdown');
+    return sortedGroups;
   };
 
-  // ========== 小红书草稿生成 ==========
-  const generateXiaohongshu = () => {
-    const totalTime = formatDuration(todayTotalSeconds);
-    const totalTimeAll = formatDuration(completedSessions.reduce((acc, s) => acc + getSessionDurationSeconds(s), 0));
+  const groupedRecords = getGroupedRecords();
+  const hasRecords = groupedRecords.length > 0;
 
-    // 随机选择一个标题模板
-    const titles = [
-      `💻 今日 coding ${totalTime}｜小白学编程 Day ${totalActiveDays}`,
-      `🚀 编程打卡 Day ${totalActiveDays}｜今天又进步了！`,
-      `✨ Vibe Coding 日记｜${todaySessions.length} 个目标达成！`,
-      `🎯 编程小白的一天｜解决了 ${todayBlockersResolved.length} 个 bug`,
-    ];
-    const title = titles[Math.floor(Math.random() * titles.length)];
-
-    let draft = `${title}\n\n`;
-
-    // 今日战绩
-    draft += `📊 今日战绩\n`;
-    draft += `⏱️ 编码时间：${totalTime || '刚开始'}\n`;
-    draft += `🎯 完成目标：${todaySessions.length} 个\n`;
-    draft += `🔧 解决问题：${todayBlockersResolved.length} 个\n\n`;
-
-    // 今天做了什么
-    if (todaySessions.length > 0) {
-      draft += `✅ 今天做了什么\n`;
-      todaySessions.slice(0, 5).forEach((s, i) => {
-        draft += `${i + 1}. ${s.goal}\n`;
-      });
-      draft += `\n`;
-    }
-
-    // 遇到的问题和解决方案（最多展示2个）
-    if (todayBlockersResolved.length > 0) {
-      draft += `💡 踩坑记录\n`;
-      todayBlockersResolved.slice(0, 2).forEach((b) => {
-        draft += `❌ 问题：${b.problem}\n`;
-        draft += `✅ 解决：${b.solution}\n\n`;
-      });
-    }
-
-    // 心得感想（随机）
-    const thoughts = [
-      `今天的收获是学会了坚持，一步一步来就好 💪`,
-      `虽然遇到了一些问题，但解决之后超有成就感！`,
-      `编程真的是越学越有意思，期待明天继续！`,
-      `小白也能写代码，一起加油吧！🔥`,
-    ];
-    draft += `💭 今日感想\n${thoughts[Math.floor(Math.random() * thoughts.length)]}\n\n`;
-
-    // 累计数据
-    draft += `📈 累计数据\n`;
-    draft += `总编码：${totalTimeAll} | 活跃 ${totalActiveDays} 天 | 解决 ${resolvedBlockers.length} 个问题\n\n`;
-
-    // Hashtags
-    draft += `———\n`;
-    draft += `#编程 #学习打卡 #程序员 #自学编程 #小白学编程 #VibeCoding #今日份学习`;
-
-    setXiaohongshuDraft(draft);
-    setCopySuccess(false);
-  };
-
-  // 复制到剪贴板
-  const copyToClipboard = async () => {
-    if (!xiaohongshuDraft) return;
-    try {
-      await navigator.clipboard.writeText(xiaohongshuDraft);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-  };
-
-  // 关闭草稿弹窗
-  const closeDraft = () => {
-    setXiaohongshuDraft(null);
-    setCopySuccess(false);
+  // ========== 图标组件 ==========
+  const TypeIcon = ({ type }: { type: "session" | "idea" | "blocker" }) => {
+    if (type === "session") return <span className="text-emerald-500">●</span>;
+    if (type === "idea") return <span className="text-amber-500">◆</span>;
+    return <span className="text-rose-500">▲</span>;
   };
 
   return (
-    <main className="min-h-screen bg-neutral-100 p-6 md:p-10">
-      <div className="max-w-xl mx-auto">
-        {/* App Title */}
-        <h1 className="text-2xl font-semibold text-neutral-800 mb-2">
-          VibeLog
-        </h1>
-        <p className="text-sm text-neutral-400 mb-8">{todayFormatted}</p>
-
-        <div className="space-y-6">
-          {/* ========== Today Review ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Today
-            </h2>
-
-            <div className="grid grid-cols-3 gap-4">
-              {/* Sessions */}
-              <div className="text-center">
-                <p className="text-3xl font-light text-neutral-800">
-                  {todaySessions.length}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">
-                  {todaySessions.length === 1 ? 'session' : 'sessions'}
-                </p>
-              </div>
-
-              {/* Coding Time */}
-              <div className="text-center">
-                <p className="text-3xl font-light text-neutral-800">
-                  {todayTotalSeconds > 0 ? formatDuration(todayTotalSeconds) : '—'}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">coding</p>
-              </div>
-
-              {/* Blockers Resolved */}
-              <div className="text-center">
-                <p className="text-3xl font-light text-neutral-800">
-                  {todayBlockersResolved.length}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">resolved</p>
-              </div>
-            </div>
-
-            {/* Today's completed sessions list */}
-            {todaySessions.length > 0 && (
-              <div className="mt-5 pt-4 border-t border-neutral-100">
-                <p className="text-xs text-neutral-400 mb-2">Completed today</p>
-                <ul className="space-y-2">
-                  {todaySessions.map((session) => (
-                    <li key={session.id} className="flex justify-between items-center text-sm">
-                      <span className="text-neutral-700 truncate flex-1 mr-2">{session.goal}</span>
-                      <span className="text-neutral-400 font-mono text-xs">{getSessionDuration(session)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* 生成小红书按钮 */}
-            <button
-              onClick={generateXiaohongshu}
-              className="w-full mt-5 py-3 bg-gradient-to-r from-red-500 to-pink-500 text-white font-medium rounded-xl hover:from-red-600 hover:to-pink-600 transition-all"
-            >
-              ✨ 生成小红书草稿
-            </button>
-          </section>
-
-          {/* ========== 小红书草稿弹窗 ========== */}
-          {xiaohongshuDraft && (
-            <section className="bg-white rounded-2xl p-5 shadow-sm border-2 border-pink-200">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xs font-medium text-pink-500 uppercase tracking-wide">
-                  小红书草稿
-                </h2>
-                <button
-                  onClick={closeDraft}
-                  className="text-neutral-400 hover:text-neutral-600 transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <pre className="text-sm text-neutral-700 whitespace-pre-wrap bg-neutral-50 rounded-xl p-4 mb-4 font-sans leading-relaxed">
-                {xiaohongshuDraft}
-              </pre>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={copyToClipboard}
-                  className={`flex-1 py-3 font-medium rounded-xl transition-all ${
-                    copySuccess
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-neutral-900 text-white hover:bg-neutral-800'
-                  }`}
-                >
-                  {copySuccess ? '✓ 已复制' : '复制文案'}
-                </button>
-                <button
-                  onClick={generateXiaohongshu}
-                  className="flex-1 py-3 bg-neutral-100 text-neutral-700 font-medium rounded-xl hover:bg-neutral-200 transition-colors"
-                >
-                  换一个
-                </button>
-              </div>
-
-              <p className="text-xs text-neutral-400 mt-3 text-center">
-                复制后打开小红书 App 粘贴发布
-              </p>
-            </section>
-          )}
-
-          {/* ========== Activity 热力图 ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Activity
-            </h2>
-
-            {/* 总统计 */}
-            <div className="grid grid-cols-3 gap-4 mb-5">
-              <div className="text-center">
-                <p className="text-2xl font-light text-neutral-800">
-                  {completedSessions.length}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">sessions</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-light text-neutral-800">
-                  {resolvedBlockers.length}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">resolved</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-light text-neutral-800">
-                  {totalActiveDays}
-                </p>
-                <p className="text-xs text-neutral-400 mt-1">days</p>
-              </div>
-            </div>
-
-            {/* 热力图 */}
-            <div className="overflow-x-auto">
-              {/* 月份标签 */}
-              <div className="flex mb-1 text-xs text-neutral-400" style={{ paddingLeft: '2px' }}>
-                {monthLabels.map((label, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      position: 'relative',
-                      left: `${label.index * 9}px`,
-                      marginRight: i < monthLabels.length - 1 ? '-8px' : 0
-                    }}
-                  >
-                    {label.month}
-                  </span>
-                ))}
-              </div>
-
-              {/* 热力图格子（7行，每行是一周的同一天） */}
-              <div className="flex flex-wrap gap-[2px]" style={{ width: `${Math.ceil(heatmapData.length / 7) * 9}px` }}>
-                {/* 按列排列（每列是一周） */}
-                {Array.from({ length: 7 }).map((_, dayOfWeek) => (
-                  <div key={dayOfWeek} className="flex gap-[2px]">
-                    {heatmapData
-                      .filter((_, index) => index % 7 === dayOfWeek)
-                      .map((day, i) => {
-                        const level = getActivityLevel(day.count);
-                        const bgColors = [
-                          'bg-neutral-100',      // level 0: 无活动
-                          'bg-emerald-200',      // level 1: 1 次
-                          'bg-emerald-300',      // level 2: 2 次
-                          'bg-emerald-400',      // level 3: 3-4 次
-                          'bg-emerald-500',      // level 4: 5+ 次
-                        ];
-                        return (
-                          <div
-                            key={day.dateKey}
-                            className={`w-[7px] h-[7px] rounded-[2px] ${bgColors[level]}`}
-                            title={`${day.date.toLocaleDateString()}: ${day.count} session${day.count !== 1 ? 's' : ''}`}
-                          />
-                        );
-                      })}
-                  </div>
-                ))}
-              </div>
-
-              {/* 图例 */}
-              <div className="flex items-center justify-end gap-1 mt-3 text-xs text-neutral-400">
-                <span>Less</span>
-                <div className="w-[7px] h-[7px] rounded-[2px] bg-neutral-100" />
-                <div className="w-[7px] h-[7px] rounded-[2px] bg-emerald-200" />
-                <div className="w-[7px] h-[7px] rounded-[2px] bg-emerald-300" />
-                <div className="w-[7px] h-[7px] rounded-[2px] bg-emerald-400" />
-                <div className="w-[7px] h-[7px] rounded-[2px] bg-emerald-500" />
-                <span>More</span>
-              </div>
-            </div>
-          </section>
-
-          {/* ========== Session 区域 ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Session
-            </h2>
-
-            {!activeSession ? (
-              <div className="space-y-3">
-                <input
-                  type="text"
-                  value={goalInput}
-                  onChange={(e) => setGoalInput(e.target.value)}
-                  placeholder="What's your goal?"
-                  className="w-full p-3 text-base bg-neutral-50 border-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400"
-                />
-                <button
-                  onClick={startSession}
-                  disabled={goalInput.trim() === ""}
-                  className="w-full py-3 bg-neutral-900 text-white font-medium rounded-xl hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:cursor-not-allowed transition-colors"
-                >
-                  Start Session
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                    <span className="text-sm text-neutral-500">Recording</span>
-                  </div>
-                  <span className="text-3xl font-light font-mono text-neutral-800 tabular-nums">
-                    {formatTime(elapsedTime)}
-                  </span>
-                </div>
-
-                <p className="text-base text-neutral-800 mb-1">
-                  {activeSession.goal}
-                </p>
-                <p className="text-sm text-neutral-400 mb-5">
-                  Started {new Date(activeSession.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-
-                <button
-                  onClick={endSession}
-                  className="w-full py-3 bg-neutral-900 text-white font-medium rounded-xl hover:bg-neutral-800 transition-colors"
-                >
-                  End Session
-                </button>
-              </div>
-            )}
-          </section>
-
-          {/* ========== Quick Idea 区域 ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Quick Idea
-            </h2>
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleIdeaKeyDown}
-              placeholder="Type and press Enter..."
-              className="w-full p-3 text-base bg-neutral-50 border-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400"
-            />
-          </section>
-
-          {/* ========== Blocker 区域 ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Blocker
-            </h2>
-            <input
-              type="text"
-              value={blockerInput}
-              onChange={(e) => setBlockerInput(e.target.value)}
-              onKeyDown={handleBlockerKeyDown}
-              placeholder="What's blocking you?"
-              className="w-full p-3 text-base bg-neutral-50 border-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400"
-            />
-
-            {/* Open Blockers */}
-            {openBlockers.length > 0 && (
-              <div className="mt-4">
-                <p className="text-xs text-neutral-400 mb-2">Open ({openBlockers.length})</p>
-                <ul className="space-y-3">
-                  {openBlockers.map((blocker) => (
-                    <li key={blocker.id} className="p-3 bg-amber-50 rounded-xl">
-                      <p className="text-base text-neutral-800 mb-2">{blocker.problem}</p>
-
-                      {resolvingId === blocker.id ? (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={solutionInput}
-                            onChange={(e) => setSolutionInput(e.target.value)}
-                            placeholder="How did you solve it?"
-                            autoFocus
-                            className="w-full p-2 text-sm bg-white border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400"
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => resolveBlocker(blocker.id)}
-                              disabled={solutionInput.trim() === ""}
-                              className="px-3 py-1.5 text-sm bg-neutral-900 text-white rounded-lg hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400 transition-colors"
-                            >
-                              Resolve
-                            </button>
-                            <button
-                              onClick={cancelResolving}
-                              className="px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-700 transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => startResolving(blocker.id)}
-                          className="text-sm text-neutral-500 hover:text-neutral-700 transition-colors"
-                        >
-                          Mark as resolved
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-
-          {/* ========== Resolved Blockers ========== */}
-          {resolvedBlockers.length > 0 && (
-            <section className="bg-white rounded-2xl p-5 shadow-sm">
-              <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-                Resolved ({resolvedBlockers.length})
-              </h2>
-              <ul className="space-y-3">
-                {resolvedBlockers.map((blocker) => (
-                  <li key={blocker.id} className="py-3 border-b border-neutral-50 last:border-0">
-                    <p className="text-base text-neutral-800">{blocker.problem}</p>
-                    <p className="text-sm text-emerald-600 mt-1">→ {blocker.solution}</p>
-                    <p className="text-xs text-neutral-400 mt-1">
-                      {new Date(blocker.resolvedAt!).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {/* ========== Session 历史记录 ========== */}
-          {completedSessions.length > 0 && (
-            <section className="bg-white rounded-2xl p-5 shadow-sm">
-              <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-                Session History
-              </h2>
-              <ul className="divide-y divide-neutral-100">
-                {completedSessions.map((session) => (
-                  <li key={session.id} className="py-3 first:pt-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-base text-neutral-800 truncate">
-                          {session.goal}
-                        </p>
-                        <p className="text-sm text-neutral-400 mt-0.5">
-                          {new Date(session.startTime).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                          {" · "}
-                          {new Date(session.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                      </div>
-                      <span className="text-sm font-mono text-neutral-500 tabular-nums">
-                        {getSessionDuration(session)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {/* ========== 已保存的 Ideas ========== */}
-          {ideas.length > 0 && (
-            <section className="bg-white rounded-2xl p-5 shadow-sm">
-              <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-                Ideas
-              </h2>
-              <ul className="space-y-2">
-                {ideas.map((idea, index) => (
-                  <li
-                    key={index}
-                    className="text-base text-neutral-700 py-2 border-b border-neutral-50 last:border-0"
-                  >
-                    {idea}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {/* ========== 导出区域 ========== */}
-          <section className="bg-white rounded-2xl p-5 shadow-sm">
-            <h2 className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-4">
-              Export
-            </h2>
-            <div className="flex gap-3">
-              <button
-                onClick={exportMarkdown}
-                className="flex-1 py-3 bg-neutral-900 text-white font-medium rounded-xl hover:bg-neutral-800 transition-colors"
-              >
-                Export Markdown
-              </button>
-              <button
-                onClick={exportJSON}
-                className="flex-1 py-3 bg-neutral-100 text-neutral-700 font-medium rounded-xl hover:bg-neutral-200 transition-colors"
-              >
-                Export JSON
-              </button>
-            </div>
-            <p className="text-xs text-neutral-400 mt-3 text-center">
-              Markdown 适合发小红书 · JSON 适合备份数据
-            </p>
-          </section>
+    <main className="min-h-screen bg-neutral-50">
+      {/* ========== 顶部区域 ========== */}
+      <div className="bg-white border-b border-neutral-100">
+        <div className="max-w-lg mx-auto px-5 py-6">
+          <h1 className="text-xl font-semibold text-neutral-800">VibeLog</h1>
+          <p className="text-sm text-neutral-400 mt-1">
+            {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
+          </p>
         </div>
       </div>
+
+      {/* ========== 主内容区域 ========== */}
+      <div className="max-w-lg mx-auto px-5 py-6">
+        {/* 进行中的 Session */}
+        {activeSession && (
+          <div className="bg-emerald-50 rounded-2xl p-5 mb-6 border border-emerald-100">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                <span className="text-sm text-emerald-600 font-medium">进行中</span>
+              </div>
+              <span className="text-2xl font-light font-mono text-emerald-700 tabular-nums">
+                {formatTime(elapsedTime)}
+              </span>
+            </div>
+            <p className="text-neutral-800 mb-4">{activeSession.goal}</p>
+            <button
+              onClick={endSession}
+              className="w-full py-3 bg-emerald-600 text-white font-medium rounded-xl hover:bg-emerald-700 transition-colors"
+            >
+              结束 Session
+            </button>
+          </div>
+        )}
+
+        {/* 开始记录按钮 */}
+        {!activeSession && (
+          <button
+            onClick={() => openSheet("select")}
+            className="w-full py-4 bg-neutral-900 text-white font-medium rounded-2xl hover:bg-neutral-800 transition-colors mb-6 flex items-center justify-center gap-2"
+          >
+            <span className="text-xl">+</span>
+            <span>开始记录</span>
+          </button>
+        )}
+
+        {/* ========== 时间线记录 ========== */}
+        {hasRecords ? (
+          <div className="space-y-6">
+            {groupedRecords.map(({ dateKey, items }) => (
+              <div key={dateKey}>
+                {/* 日期标题 */}
+                <h2 className="text-sm font-medium text-neutral-400 mb-3 sticky top-0 bg-neutral-50 py-2">
+                  {formatDateHeader(dateKey)}
+                </h2>
+
+                {/* 该日期的记录 */}
+                <div className="space-y-3">
+                  {items.map(item => (
+                    <div
+                      key={item.id}
+                      className="bg-white rounded-xl p-4 shadow-sm group"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="mt-1">
+                          <TypeIcon type={item.type} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-neutral-800 flex-1">{renderContentWithTags(item.content)}</p>
+                            {/* 操作按钮 */}
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                              {/* Session 继续按钮 */}
+                              {item.type === "session" && !activeSession && (
+                                <button
+                                  onClick={() => continueSession(item.content)}
+                                  className="p-1.5 text-emerald-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"
+                                  title="继续"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                  </svg>
+                                </button>
+                              )}
+                              {/* 编辑按钮 */}
+                              <button
+                                onClick={() => startEditing(item.id, item.type, item.content, item.images)}
+                                className="p-1.5 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 rounded-lg"
+                                title="编辑"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 mt-2 text-sm text-neutral-400">
+                            <span>{item.time}</span>
+                            {item.meta?.duration && (
+                              <>
+                                <span>·</span>
+                                <span className="text-emerald-600">{item.meta.duration}</span>
+                              </>
+                            )}
+                            {item.meta?.status === "resolved" && (
+                              <>
+                                <span>·</span>
+                                <span className="text-emerald-600">已解决</span>
+                              </>
+                            )}
+                            {item.meta?.status === "open" && (
+                              <>
+                                <span>·</span>
+                                <span className="text-rose-500">待解决</span>
+                              </>
+                            )}
+                          </div>
+                          {item.meta?.solution && (
+                            <p className="text-sm text-emerald-600 mt-2">
+                              → {renderContentWithTags(item.meta.solution)}
+                            </p>
+                          )}
+                          {/* 图片显示 */}
+                          {item.images && item.images.length > 0 && (
+                            <div className="flex gap-2 mt-3 overflow-x-auto">
+                              {item.images.map((img, i) => (
+                                <img
+                                  key={i}
+                                  src={img}
+                                  alt={`图片 ${i + 1}`}
+                                  className="w-20 h-20 object-cover rounded-lg flex-shrink-0"
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-16">
+            <p className="text-neutral-400">还没有记录</p>
+            <p className="text-neutral-300 text-sm mt-1">点击上方按钮开始你的第一条记录</p>
+          </div>
+        )}
+      </div>
+
+      {/* ========== 底部弹出面板 ========== */}
+      {showSheet && (
+        <>
+          {/* 遮罩 */}
+          <div
+            className="fixed inset-0 bg-black/30 z-40"
+            onClick={closeSheet}
+          />
+
+          {/* 面板 */}
+          <div className="fixed bottom-0 left-0 right-0 bg-white rounded-t-3xl z-50 p-6 pb-10 animate-slide-up">
+            {sheetMode === "select" ? (
+              <>
+                <h3 className="text-lg font-semibold text-neutral-800 mb-5">选择记录类型</h3>
+                <div className="space-y-3">
+                  <button
+                    onClick={() => setSheetMode("session")}
+                    className="w-full p-4 bg-emerald-50 rounded-xl text-left hover:bg-emerald-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-emerald-500 text-lg">●</span>
+                      <div>
+                        <p className="font-medium text-neutral-800">开始 Session</p>
+                        <p className="text-sm text-neutral-400">记录一段 coding 时光</p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setSheetMode("idea")}
+                    className="w-full p-4 bg-amber-50 rounded-xl text-left hover:bg-amber-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-amber-500 text-lg">◆</span>
+                      <div>
+                        <p className="font-medium text-neutral-800">记录 Idea</p>
+                        <p className="text-sm text-neutral-400">快速记下灵感想法</p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setSheetMode("blocker")}
+                    className="w-full p-4 bg-rose-50 rounded-xl text-left hover:bg-rose-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-rose-500 text-lg">▲</span>
+                      <div>
+                        <p className="font-medium text-neutral-800">遇到 Blocker</p>
+                        <p className="text-sm text-neutral-400">记录卡住你的问题</p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-neutral-800">
+                    {editingId ? "编辑" : (
+                      <>
+                        {sheetMode === "session" && "开始 Session"}
+                        {sheetMode === "idea" && "记录 Idea"}
+                        {sheetMode === "blocker" && "遇到 Blocker"}
+                      </>
+                    )}
+                  </h3>
+                  <button
+                    onClick={() => editingId ? closeSheet() : setSheetMode("select")}
+                    className="text-neutral-400 hover:text-neutral-600"
+                  >
+                    {editingId ? "取消" : "返回"}
+                  </button>
+                </div>
+
+                {/* 输入框 */}
+                <textarea
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  placeholder={
+                    sheetMode === "session" ? "这次要做什么？" :
+                    sheetMode === "idea" ? "写下你的想法..." :
+                    "什么问题卡住了你？"
+                  }
+                  autoFocus
+                  rows={3}
+                  className="w-full p-4 text-base bg-neutral-50 border-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-neutral-300 text-neutral-800 placeholder-neutral-400 resize-none"
+                />
+
+                {/* 已选图片预览 */}
+                {images.length > 0 && (
+                  <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
+                    {images.map((img, i) => (
+                      <div key={i} className="relative flex-shrink-0">
+                        <img
+                          src={img}
+                          alt={`图片 ${i + 1}`}
+                          className="w-16 h-16 object-cover rounded-lg"
+                        />
+                        <button
+                          onClick={() => removeImage(i)}
+                          className="absolute -top-1 -right-1 w-5 h-5 bg-neutral-800 text-white rounded-full text-xs flex items-center justify-center"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 快捷按钮 */}
+                <div className="flex items-center gap-2 mt-3 mb-4">
+                  {/* 标签按钮 */}
+                  <button
+                    onClick={insertHashtag}
+                    className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors"
+                  >
+                    # 标签
+                  </button>
+
+                  {/* 图片按钮 - 仅 idea 模式显示 */}
+                  {sheetMode === "idea" && (
+                    <label className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors cursor-pointer">
+                      📷 图片
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+
+                  {/* 模板按钮 */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowTemplates(!showTemplates)}
+                      className="px-3 py-1.5 bg-neutral-100 text-neutral-600 rounded-lg text-sm hover:bg-neutral-200 transition-colors"
+                    >
+                      📋 模板
+                    </button>
+
+                    {/* 模板下拉菜单 */}
+                    {showTemplates && (
+                      <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-lg border border-neutral-100 py-2 min-w-[140px] z-10">
+                        {templates[sheetMode].map((tpl, i) => (
+                          <button
+                            key={i}
+                            onClick={() => insertTemplate(tpl)}
+                            className="w-full px-4 py-2 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                          >
+                            {tpl}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSubmit}
+                  disabled={!inputValue.trim() && images.length === 0}
+                  className="w-full py-4 bg-neutral-900 text-white font-medium rounded-xl hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-400 transition-colors flex items-center justify-center gap-2"
+                >
+                  <span>{editingId ? "保存" : (sheetMode === "session" ? "开始" : "发送")}</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 2L11 13"></path>
+                    <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* 动画样式 */}
+      <style jsx>{`
+        @keyframes slide-up {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+        .animate-slide-up {
+          animation: slide-up 0.3s ease-out;
+        }
+      `}</style>
     </main>
   );
 }

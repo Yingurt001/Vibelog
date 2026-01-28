@@ -8,6 +8,7 @@ export interface Idea {
   id: string;          // 唯一标识（用时间戳生成）
   content: string;     // 想法内容
   createdAt: string;   // 创建时间（ISO 格式字符串）
+  images?: string[];   // 图片数组（base64 格式）
 }
 
 /**
