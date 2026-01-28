@@ -680,7 +680,7 @@ export default function Home() {
                               {renderContentWithTags(item.content)}
                             </p>
                             {/* 操作按钮 */}
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 ease-linear">
+                            <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200 ease-linear">
                               {/* Session 继续按钮 */}
                               {item.type === "session" && !activeSession && (
                                 <button
