@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -12,21 +12,22 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: "#262626",
+};
+
 export const metadata: Metadata = {
   title: "VibeLog",
   description: "记录你的 Vibe Coding 旅程",
   manifest: "/manifest.json",
-  themeColor: "#262626",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
     title: "VibeLog",
-  },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
   },
   icons: {
     icon: "/icons/icon-192.png",
