@@ -40,6 +40,14 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingType, setEditingType] = useState<"session" | "idea" | "blocker" | null>(null);
 
+  // ========== 主题状态 ==========
+  const [theme, setTheme] = useState("neon");
+
+  // ========== 报告状态 ==========
+  const [showReport, setShowReport] = useState(false);
+  const [reportScope, setReportScope] = useState<"weekly" | "monthly">("weekly");
+  const [reportCopied, setReportCopied] = useState(false);
+
   // ========== 认证检查 ==========
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -62,6 +70,19 @@ export default function Home() {
 
     return () => subscription.unsubscribe();
   }, [router]);
+
+  // ========== 主题初始化 ==========
+  useEffect(() => {
+    const saved = localStorage.getItem("vibelog-theme") || "neon";
+    setTheme(saved);
+    document.documentElement.setAttribute("data-theme", saved);
+  }, []);
+
+  const changeTheme = (newTheme: string) => {
+    setTheme(newTheme);
+    localStorage.setItem("vibelog-theme", newTheme);
+    document.documentElement.setAttribute("data-theme", newTheme);
+  };
 
   // ========== 加载数据 ==========
   const loadData = useCallback(async () => {
@@ -133,12 +154,6 @@ export default function Home() {
 
   const formatDateHeader = (dateKey: string): string => {
     const date = new Date(dateKey);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    if (dateKey === getDateKey(today)) return "今天";
-    if (dateKey === getDateKey(yesterday)) return "昨天";
     return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
   };
 
@@ -184,19 +199,21 @@ export default function Home() {
     });
   };
 
-  // 继续 Session
-  const continueSession = async (goal: string) => {
+  // 继续 Session（恢复原 Session）
+  const continueSession = async (sessionId: string) => {
     if (activeSession || !user) return;
-    const { data, error } = await supabase.from("sessions").insert({
-      user_id: user.id,
-      goal,
-      start_time: new Date().toISOString(),
+    const { error } = await supabase.from("sessions").update({
       status: "active",
-    }).select().single();
+      end_time: null,
+    }).eq("id", sessionId);
 
-    if (!error && data) {
-      setSessions([data, ...sessions]);
-      setActiveSession(data);
+    if (!error) {
+      const updated = sessions.map(s =>
+        s.id === sessionId ? { ...s, status: "active" as const, end_time: null } : s
+      );
+      setSessions(updated);
+      const resumed = updated.find(s => s.id === sessionId);
+      if (resumed) setActiveSession(resumed);
     }
   };
 
@@ -461,6 +478,73 @@ export default function Home() {
     setShowFilter(false);
   };
 
+  // ========== 报告数据 ==========
+  const reportData = useMemo(() => {
+    const now = new Date();
+    const startDate = new Date(now);
+    if (reportScope === "weekly") {
+      startDate.setDate(now.getDate() - 7);
+    } else {
+      startDate.setMonth(now.getMonth() - 1);
+    }
+    startDate.setHours(0, 0, 0, 0);
+    const startISO = startDate.toISOString();
+
+    const filteredSessions = sessions.filter(
+      s => s.status === "completed" && s.start_time >= startISO
+    );
+    const filteredIdeas = ideas.filter(i => i.created_at >= startISO);
+    const filteredBlockers = blockers.filter(b => b.created_at >= startISO);
+
+    const totalSessionTime = filteredSessions.reduce(
+      (sum, s) => sum + getSessionDuration(s), 0
+    );
+
+    return {
+      sessionCount: filteredSessions.length,
+      totalTime: totalSessionTime,
+      ideaCount: filteredIdeas.length,
+      blockerCount: filteredBlockers.length,
+      openBlockers: filteredBlockers.filter(b => b.status === "open").length,
+      resolvedBlockers: filteredBlockers.filter(b => b.status === "resolved").length,
+      sessions: filteredSessions.map(s => ({
+        goal: s.goal,
+        duration: formatDuration(getSessionDuration(s)),
+        date: new Date(s.start_time).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }),
+      })),
+    };
+  }, [reportScope, sessions, ideas, blockers]);
+
+  const generateReportMarkdown = (): string => {
+    const scopeLabel = reportScope === "weekly" ? "周报" : "月报";
+    const lines: string[] = [
+      `# VibeLog ${scopeLabel}`,
+      "",
+      `## 概览`,
+      `- Sessions: ${reportData.sessionCount} 次，共 ${formatDuration(reportData.totalTime)}`,
+      `- Ideas: ${reportData.ideaCount} 条`,
+      `- Blockers: ${reportData.blockerCount} 个（已解决 ${reportData.resolvedBlockers}，待解决 ${reportData.openBlockers}）`,
+      "",
+    ];
+    if (reportData.sessions.length > 0) {
+      lines.push(`## Sessions`, "");
+      reportData.sessions.forEach(s => {
+        lines.push(`- ${s.date} | ${s.goal} (${s.duration})`);
+      });
+    }
+    return lines.join("\n");
+  };
+
+  const copyReport = async () => {
+    try {
+      await navigator.clipboard.writeText(generateReportMarkdown());
+      setReportCopied(true);
+      setTimeout(() => setReportCopied(false), 2000);
+    } catch {
+      // fallback: select text
+    }
+  };
+
   // ========== 图标组件 ==========
   const TypeIcon = ({ type }: { type: "session" | "idea" | "blocker" }) => {
     if (type === "session") return <span className="text-[var(--neon-cyan)]">●</span>;
@@ -523,27 +607,73 @@ export default function Home() {
                 {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
               </p>
             </div>
-            <button
-              onClick={handleLogout}
-              className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
-              style={{
-                fontFamily: "var(--font-mono), monospace",
-                color: "rgba(224, 224, 224, 0.4)",
-                borderColor: "rgba(224, 224, 224, 0.15)",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = "var(--neon-magenta)";
-                e.currentTarget.style.borderColor = "var(--neon-magenta)";
-                e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)";
-                e.currentTarget.style.borderColor = "rgba(224, 224, 224, 0.15)";
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            >
-              登出
-            </button>
+            <div className="flex items-center gap-2">
+              {/* 主题切换 */}
+              <div className="flex gap-1">
+                {([
+                  { key: "neon", icon: "◉" },
+                  { key: "light", icon: "☀" },
+                  { key: "dark", icon: "☾" },
+                ] as const).map(t => (
+                  <button
+                    key={t.key}
+                    onClick={() => changeTheme(t.key)}
+                    className="w-7 h-7 text-xs rounded-none border transition-all duration-200 ease-linear"
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      background: theme === t.key ? "var(--neon-cyan)" : "transparent",
+                      color: theme === t.key ? "var(--text-on-accent)" : "var(--text-muted)",
+                      borderColor: theme === t.key ? "var(--neon-cyan)" : "var(--text-muted-light)",
+                    }}
+                    title={t.key}
+                  >
+                    {t.icon}
+                  </button>
+                ))}
+              </div>
+              {/* 报告按钮 */}
+              <button
+                onClick={() => setShowReport(true)}
+                className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+                style={{
+                  fontFamily: "var(--font-mono), monospace",
+                  color: "var(--neon-orange)",
+                  borderColor: "var(--neon-orange)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--neon-orange)";
+                  e.currentTarget.style.color = "var(--text-on-accent)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "var(--neon-orange)";
+                }}
+              >
+                报告
+              </button>
+              {/* 登出 */}
+              <button
+                onClick={handleLogout}
+                className="px-3 py-1.5 text-xs rounded-none uppercase tracking-wider transition-all duration-200 ease-linear border"
+                style={{
+                  fontFamily: "var(--font-mono), monospace",
+                  color: "var(--text-muted)",
+                  borderColor: "var(--text-muted-light)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--neon-magenta)";
+                  e.currentTarget.style.borderColor = "var(--neon-magenta)";
+                  e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--text-muted)";
+                  e.currentTarget.style.borderColor = "var(--text-muted-light)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                登出
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -617,7 +747,7 @@ export default function Home() {
                 style={{
                   fontFamily: "var(--font-mono), monospace",
                   background: "var(--neon-magenta)",
-                  color: "#090014",
+                  color: "var(--text-on-accent)",
                   transform: "skewX(-12deg)",
                   boxShadow: "0 0 16px rgba(255, 0, 255, 0.4)",
                 }}
@@ -652,7 +782,7 @@ export default function Home() {
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = "var(--neon-cyan)";
-              e.currentTarget.style.color = "#090014";
+              e.currentTarget.style.color = "var(--text-on-accent)";
               e.currentTarget.style.boxShadow = "0 0 24px rgba(0, 255, 255, 0.5)";
               e.currentTarget.style.textShadow = "none";
             }}
@@ -770,7 +900,7 @@ export default function Home() {
                               {/* Session 继续按钮 */}
                               {item.type === "session" && !activeSession && (
                                 <button
-                                  onClick={() => continueSession(item.content)}
+                                  onClick={() => continueSession(item.id)}
                                   className="p-1.5 rounded-none transition-all duration-200 ease-linear"
                                   style={{ color: "var(--neon-cyan)" }}
                                   title="继续"
@@ -792,7 +922,7 @@ export default function Home() {
                               <button
                                 onClick={() => startEditing(item.id, item.type, item.content, item.images)}
                                 className="p-1.5 rounded-none transition-all duration-200 ease-linear"
-                                style={{ color: "rgba(224, 224, 224, 0.4)" }}
+                                style={{ color: "var(--text-muted)" }}
                                 title="编辑"
                                 onMouseEnter={(e) => {
                                   e.currentTarget.style.color = "var(--neon-magenta)";
@@ -800,7 +930,7 @@ export default function Home() {
                                   e.currentTarget.style.boxShadow = "0 0 8px rgba(255, 0, 255, 0.3)";
                                 }}
                                 onMouseLeave={(e) => {
-                                  e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)";
+                                  e.currentTarget.style.color = "var(--text-muted)";
                                   e.currentTarget.style.background = "transparent";
                                   e.currentTarget.style.boxShadow = "none";
                                 }}
@@ -814,7 +944,7 @@ export default function Home() {
                           </div>
                           <div
                             className="flex items-center gap-2 mt-2 text-sm"
-                            style={{ fontFamily: "var(--font-mono), monospace", color: "rgba(224, 224, 224, 0.4)" }}
+                            style={{ fontFamily: "var(--font-mono), monospace", color: "var(--text-muted)" }}
                           >
                             <span>{item.time}</span>
                             {item.meta?.duration && (
@@ -895,7 +1025,7 @@ export default function Home() {
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = "var(--neon-cyan)";
-                e.currentTarget.style.color = "#090014";
+                e.currentTarget.style.color = "var(--text-on-accent)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
@@ -911,7 +1041,7 @@ export default function Home() {
               className="uppercase tracking-widest"
               style={{
                 fontFamily: "var(--font-mono), monospace",
-                color: "rgba(224, 224, 224, 0.3)",
+                color: "var(--text-muted-light)",
                 textShadow: "0 0 8px rgba(0, 255, 255, 0.15)",
               }}
             >
@@ -936,7 +1066,7 @@ export default function Home() {
           {/* 遮罩 */}
           <div
             className="fixed inset-0 z-40"
-            style={{ background: "rgba(9, 0, 20, 0.7)", backdropFilter: "blur(4px)" }}
+            style={{ background: "var(--overlay-bg)", backdropFilter: "blur(4px)" }}
             onClick={closeSheet}
           />
 
@@ -982,7 +1112,7 @@ export default function Home() {
                       <span className="text-lg" style={{ color: "var(--neon-cyan)", textShadow: "0 0 8px rgba(0, 255, 255, 0.5)" }}>●</span>
                       <div>
                         <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>开始 Session</p>
-                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>记录一段 coding 时光</p>
+                        <p className="text-sm" style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace" }}>记录一段 coding 时光</p>
                       </div>
                     </div>
                   </button>
@@ -1008,7 +1138,7 @@ export default function Home() {
                       <span className="text-lg" style={{ color: "var(--neon-orange)", textShadow: "0 0 8px rgba(255, 107, 0, 0.5)" }}>◆</span>
                       <div>
                         <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>记录 Idea</p>
-                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>快速记下灵感想法</p>
+                        <p className="text-sm" style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace" }}>快速记下灵感想法</p>
                       </div>
                     </div>
                   </button>
@@ -1034,7 +1164,7 @@ export default function Home() {
                       <span className="text-lg" style={{ color: "var(--neon-magenta)", textShadow: "0 0 8px rgba(255, 0, 255, 0.5)" }}>▲</span>
                       <div>
                         <p className="font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono), monospace" }}>遇到 Blocker</p>
-                        <p className="text-sm" style={{ color: "rgba(224, 224, 224, 0.4)", fontFamily: "var(--font-mono), monospace" }}>记录卡住你的问题</p>
+                        <p className="text-sm" style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace" }}>记录卡住你的问题</p>
                       </div>
                     </div>
                   </button>
@@ -1063,10 +1193,10 @@ export default function Home() {
                     className="transition-all duration-200 ease-linear uppercase tracking-wider text-sm"
                     style={{
                       fontFamily: "var(--font-mono), monospace",
-                      color: "rgba(224, 224, 224, 0.4)",
+                      color: "var(--text-muted)",
                     }}
                     onMouseEnter={(e) => { e.currentTarget.style.color = "var(--neon-magenta)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(224, 224, 224, 0.4)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
                   >
                     {editingId ? "取消" : "返回"}
                   </button>
@@ -1107,7 +1237,7 @@ export default function Home() {
                         <button
                           onClick={() => removeImage(i)}
                           className="absolute -top-1 -right-1 w-5 h-5 text-xs flex items-center justify-center rounded-none"
-                          style={{ background: "var(--neon-magenta)", color: "#090014" }}
+                          style={{ background: "var(--neon-magenta)", color: "var(--text-on-accent)" }}
                         >
                           ×
                         </button>
@@ -1234,7 +1364,7 @@ export default function Home() {
                   style={{
                     fontFamily: "var(--font-mono), monospace",
                     background: "var(--neon-magenta)",
-                    color: "#090014",
+                    color: "var(--text-on-accent)",
                     transform: "skewX(-12deg)",
                     boxShadow: "0 0 16px rgba(255, 0, 255, 0.4)",
                   }}
@@ -1266,7 +1396,7 @@ export default function Home() {
           {/* 遮罩 */}
           <div
             className="fixed inset-0 z-40"
-            style={{ background: "rgba(9, 0, 20, 0.7)", backdropFilter: "blur(4px)" }}
+            style={{ background: "var(--overlay-bg)", backdropFilter: "blur(4px)" }}
             onClick={() => setShowFilter(false)}
           />
 
@@ -1328,7 +1458,7 @@ export default function Home() {
                   {availableMonths.length === 0 && (
                     <p
                       className="text-xs"
-                      style={{ fontFamily: "var(--font-mono), monospace", color: "rgba(224, 224, 224, 0.3)" }}
+                      style={{ fontFamily: "var(--font-mono), monospace", color: "var(--text-muted-light)" }}
                     >
                       暂无数据
                     </p>
@@ -1392,7 +1522,7 @@ export default function Home() {
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = "var(--neon-cyan)";
-                  e.currentTarget.style.color = "#090014";
+                  e.currentTarget.style.color = "var(--text-on-accent)";
                   e.currentTarget.style.textShadow = "none";
                   e.currentTarget.style.boxShadow = "0 0 16px rgba(0, 255, 255, 0.4)";
                 }}
@@ -1408,6 +1538,158 @@ export default function Home() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ========== 报告弹窗 ========== */}
+      {showReport && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: "var(--overlay-bg)" }}
+          onClick={() => setShowReport(false)}
+        >
+          <div
+            className="w-full max-w-md max-h-[80vh] overflow-y-auto border-t-2 border-l-2 p-5"
+            style={{
+              background: "var(--surface)",
+              borderTopColor: "var(--neon-cyan)",
+              borderLeftColor: "var(--neon-magenta)",
+              boxShadow: "0 0 30px rgba(0,255,255,0.15), 0 0 60px rgba(255,0,255,0.08)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 标题 */}
+            <div className="flex items-center justify-between mb-4">
+              <h2
+                className="text-lg font-bold tracking-wider"
+                style={{
+                  fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                  color: "var(--neon-cyan)",
+                  textShadow: "0 0 10px rgba(0,255,255,0.4)",
+                }}
+              >
+                报告
+              </h2>
+              <button
+                onClick={() => setShowReport(false)}
+                className="text-xl leading-none"
+                style={{ color: "var(--text-muted)" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 周/月切换 */}
+            <div className="flex mb-4">
+              {(["weekly", "monthly"] as const).map((scope) => {
+                const active = reportScope === scope;
+                return (
+                  <button
+                    key={scope}
+                    onClick={() => setReportScope(scope)}
+                    className="flex-1 py-2 text-sm uppercase tracking-wider transition-all duration-200 ease-linear border-b-2"
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      color: active ? "var(--neon-cyan)" : "var(--text-muted)",
+                      borderBottomColor: active ? "var(--neon-cyan)" : "transparent",
+                      textShadow: active ? "0 0 8px rgba(0,255,255,0.4)" : "none",
+                    }}
+                  >
+                    {scope === "weekly" ? "最近 7 天" : "最近 30 天"}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 统计卡片 */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {[
+                { label: "Sessions", value: `${reportData.sessionCount} 次`, sub: formatDuration(reportData.totalTime) },
+                { label: "Ideas", value: `${reportData.ideaCount} 条`, sub: null },
+                { label: "已解决", value: `${reportData.resolvedBlockers}`, sub: "blockers" },
+                { label: "待解决", value: `${reportData.openBlockers}`, sub: "blockers" },
+              ].map((card) => (
+                <div
+                  key={card.label}
+                  className="p-3 border"
+                  style={{
+                    background: "var(--surface-light)",
+                    borderColor: "var(--text-muted-light)",
+                  }}
+                >
+                  <div
+                    className="text-xs uppercase tracking-wider mb-1"
+                    style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace" }}
+                  >
+                    {card.label}
+                  </div>
+                  <div
+                    className="text-lg font-bold"
+                    style={{ color: "var(--neon-cyan)", fontFamily: "var(--font-heading), Orbitron, sans-serif" }}
+                  >
+                    {card.value}
+                  </div>
+                  {card.sub && (
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      {card.sub}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Session 列表 */}
+            {reportData.sessions.length > 0 && (
+              <div className="mb-4">
+                <h3
+                  className="text-sm font-bold tracking-wider mb-2"
+                  style={{
+                    fontFamily: "var(--font-heading), Orbitron, sans-serif",
+                    color: "var(--neon-orange)",
+                    textShadow: "0 0 8px rgba(255,107,0,0.3)",
+                  }}
+                >
+                  Sessions
+                </h3>
+                <div className="space-y-1">
+                  {reportData.sessions.map((s, i) => (
+                    <div
+                      key={i}
+                      className="flex justify-between items-center text-xs py-1 border-b"
+                      style={{
+                        fontFamily: "var(--font-mono), monospace",
+                        borderBottomColor: "var(--text-muted-light)",
+                      }}
+                    >
+                      <span style={{ color: "var(--foreground)" }}>
+                        {s.date} | {s.goal}
+                      </span>
+                      <span style={{ color: "var(--neon-cyan)" }}>{s.duration}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 复制按钮 */}
+            <button
+              onClick={copyReport}
+              className="w-full py-3 font-medium uppercase tracking-wider transition-all duration-200 ease-linear"
+              style={{
+                fontFamily: "var(--font-mono), monospace",
+                background: reportCopied ? "var(--neon-cyan)" : "var(--neon-magenta)",
+                color: "var(--text-on-accent)",
+                transform: "skewX(-12deg)",
+                boxShadow: reportCopied
+                  ? "0 0 16px rgba(0,255,255,0.4)"
+                  : "0 0 16px rgba(255,0,255,0.4)",
+              }}
+            >
+              <span style={{ display: "inline-block", transform: "skewX(12deg)" }}>
+                {reportCopied ? "已复制!" : "复制 Markdown"}
+              </span>
+            </button>
+          </div>
+        </div>
       )}
     </main>
   );

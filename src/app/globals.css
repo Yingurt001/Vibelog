@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-:root {
+/* ========== 霓虹主题（默认） ========== */
+:root,
+[data-theme="neon"] {
   --background: #090014;
   --foreground: #E0E0E0;
   --neon-cyan: #00FFFF;
@@ -8,6 +10,40 @@
   --neon-orange: #FF6B00;
   --surface: #120822;
   --surface-light: #1A0E2E;
+  --text-on-accent: #090014;
+  --text-muted: rgba(224, 224, 224, 0.4);
+  --text-muted-light: rgba(224, 224, 224, 0.3);
+  --overlay-bg: rgba(9, 0, 20, 0.7);
+}
+
+/* ========== 白色主题 ========== */
+[data-theme="light"] {
+  --background: #F5F5F7;
+  --foreground: #1A1A2E;
+  --neon-cyan: #0891B2;
+  --neon-magenta: #C026D3;
+  --neon-orange: #EA580C;
+  --surface: #FFFFFF;
+  --surface-light: #F0F0F5;
+  --text-on-accent: #FFFFFF;
+  --text-muted: rgba(26, 26, 46, 0.5);
+  --text-muted-light: rgba(26, 26, 46, 0.3);
+  --overlay-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* ========== 深色主题 ========== */
+[data-theme="dark"] {
+  --background: #1A1A2E;
+  --foreground: #C8C8D0;
+  --neon-cyan: #5EEAD4;
+  --neon-magenta: #E879F9;
+  --neon-orange: #FB923C;
+  --surface: #252540;
+  --surface-light: #2D2D4A;
+  --text-on-accent: #1A1A2E;
+  --text-muted: rgba(200, 200, 208, 0.4);
+  --text-muted-light: rgba(200, 200, 208, 0.3);
+  --overlay-bg: rgba(10, 10, 20, 0.7);
 }
 
 @theme inline {
@@ -26,8 +62,12 @@ body {
   overflow-x: hidden;
 }
 
-/* CRT Scanline overlay */
+/* CRT Scanline overlay — 仅霓虹主题 */
 body::after {
+  content: none;
+}
+html[data-theme="neon"] body::after,
+html:not([data-theme]) body::after {
   content: "";
   position: fixed;
   inset: 0;
@@ -42,8 +82,12 @@ body::after {
   z-index: 9999;
 }
 
-/* Floating sun gradient background */
+/* Floating sun gradient background — 仅霓虹主题 */
 body::before {
+  content: none;
+}
+html[data-theme="neon"] body::before,
+html:not([data-theme]) body::before {
   content: "";
   position: fixed;
   top: -30vh;
@@ -111,8 +155,8 @@ body::before {
 
 /* Selection styling */
 ::selection {
-  background: rgba(255, 0, 255, 0.3);
-  color: #00FFFF;
+  background: var(--neon-magenta);
+  color: var(--text-on-accent);
 }
 
 /* Scrollbar styling */
@@ -125,10 +169,11 @@ body::before {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 0, 255, 0.3);
+  background: var(--neon-magenta);
+  opacity: 0.3;
   border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 0, 255, 0.5);
+  opacity: 0.5;
 }

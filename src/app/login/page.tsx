@@ -109,7 +109,7 @@ export default function LoginPage() {
                   className="flex-1 py-2 text-sm uppercase tracking-wider transition-all duration-200 ease-linear border-b-2"
                   style={{
                     fontFamily: "var(--font-mono), monospace",
-                    color: active ? "var(--neon-cyan)" : "rgba(224, 224, 224, 0.4)",
+                    color: active ? "var(--neon-cyan)" : "var(--text-muted)",
                     borderBottomColor: active ? "var(--neon-cyan)" : "transparent",
                     textShadow: active ? "0 0 8px rgba(0, 255, 255, 0.4)" : "none",
                   }}
@@ -218,7 +218,7 @@ export default function LoginPage() {
               style={{
                 fontFamily: "var(--font-mono), monospace",
                 background: "var(--neon-magenta)",
-                color: "#090014",
+                color: "var(--text-on-accent)",
                 transform: "skewX(-12deg)",
                 boxShadow: "0 0 16px rgba(255, 0, 255, 0.4)",
               }}
